@@ -1,10 +1,15 @@
 """E2 — Fluid simulation.  score + recipe -> fluid frames + velocity fields.
 
 A Jos-Stam style stable-fluids solver (incompressible Navier-Stokes) in pure
-NumPy with toroidal boundaries, so it is fully deterministic (seed -> identical
-video) and runs anywhere with no GPU. The simulation is the *movement skeleton*:
-audio onsets inject splats, RMS drives vorticity, and an upcoming drop is
-anticipated by sub-visible vortices (lookahead).
+NumPy with toroidal boundaries: exact FFT pressure projection, MacCormack
+advection, fully deterministic (seed -> identical video), runs with no GPU.
+
+The simulation is the *movement skeleton* and is alive at all times, not just on
+onsets: a continuous curl-noise field stirs the fluid (scaled by loudness),
+persistent dye emitters keep colour flowing, and audio events are accents on top
+-- kicks inject anchored splats, hats pop everywhere, RMS drives vorticity, and
+an upcoming drop is anticipated by sub-visible vortices (lookahead). Frames are
+rendered HDR -> filmic tone-map + bloom over a dark field from a recipe palette.
 
 Outputs, per run dir:
   fluid/%06d.png        RGB density frame (render_resolution)
@@ -25,6 +30,12 @@ from .score import Score
 from .recipe import Recipe
 
 ProgressFn = Callable[[int, int], None]
+
+# Maps recipe splat "force" to a sane velocity in cells/frame (avoids CFL blowup).
+FORCE_K = 0.04
+# Scales recipe vorticity into the velocity regime; confinement is a positive
+# feedback, so this must keep the per-step force a small fraction of velocity.
+VORT_K = 0.015
 
 
 def _hue_to_rgb(hue: np.ndarray) -> np.ndarray:
@@ -49,6 +60,30 @@ def _centroid_to_hue(centroid_hz: float) -> float:
     return 0.92 - 0.42 * x          # 0.92 (magenta) -> 0.50 (teal/cyan)
 
 
+def _hex_to_rgb(h: str) -> np.ndarray:
+    h = h.lstrip("#")
+    return np.array([int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)], np.float32)
+
+
+def _tonemap(hdr: np.ndarray, exposure: float) -> np.ndarray:
+    """HDR density -> filmic LDR: exponential exposure + mild gamma."""
+    mapped = 1.0 - np.exp(-exposure * np.clip(hdr, 0.0, None))
+    return np.clip(mapped, 0.0, 1.0) ** (1.0 / 1.15)
+
+
+def _curl_noise(gx: np.ndarray, gy: np.ndarray, t: float, scale: float):
+    """Divergence-free ambient velocity from the curl of a moving potential."""
+    sx = gx * 2 * np.pi * scale
+    sy = gy * 2 * np.pi * scale
+    psi = (np.sin(sx + t) * np.cos(sy * 1.3 - 0.7 * t)
+           + 0.6 * np.sin(sx * 0.7 - 1.1 * t) * np.sin(sy * 1.7 + 0.5 * t)
+           + 0.4 * np.sin(sx * 1.9 + 0.3 * t) * np.cos(sy * 0.9 - 0.6 * t))
+    u = (np.roll(psi, -1, 0) - np.roll(psi, 1, 0)) * 0.5     # dpsi/dy
+    v = -(np.roll(psi, -1, 1) - np.roll(psi, 1, 1)) * 0.5    # -dpsi/dx
+    peak = float(np.sqrt(u * u + v * v).max()) + 1e-6        # normalise to unit speed
+    return (u / peak).astype(np.float32), (v / peak).astype(np.float32)
+
+
 @dataclass
 class SimResult:
     fluid_dir: Path
@@ -61,9 +96,11 @@ class SimResult:
 class FluidSim:
     """Toroidal stable-fluids solver on an NxN grid."""
 
-    def __init__(self, n: int, dissipation: float, viscosity: float, seed: int):
+    def __init__(self, n: int, dissipation: float, viscosity: float, seed: int,
+                 vel_dissipation: float = 0.96):
         self.n = n
         self.dissipation = dissipation
+        self.vel_dissipation = vel_dissipation
         self.viscosity = viscosity
         self.rng = np.random.default_rng(seed)
         self.u = np.zeros((n, n), np.float32)
@@ -83,18 +120,19 @@ class FluidSim:
     # ---- operators ---------------------------------------------------------
     def _advect(self, field: np.ndarray, u: np.ndarray, v: np.ndarray,
                 dt: float) -> np.ndarray:
-        """MacCormack advection (cubic semi-Lagrangian + error correction).
+        """MacCormack advection (bilinear semi-Lagrangian + error correction).
 
-        Two cubic backtraces with a corrector pass remove most numerical
-        diffusion, keeping crisp filaments; a min/max limiter clamps overshoot.
+        Two bilinear backtraces with a corrector pass remove most numerical
+        diffusion, keeping crisp filaments; bilinear is max-principle stable
+        (no cubic overshoot) and a min/max limiter clamps the corrector.
         Handles 1- or multi-channel fields in a single ``cv2.remap`` call.
         """
         mx = (self.xs - dt * u).astype(np.float32)
         my = (self.ys - dt * v).astype(np.float32)
-        fwd = cv2.remap(field, mx, my, cv2.INTER_CUBIC, borderMode=cv2.BORDER_WRAP)
+        fwd = cv2.remap(field, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
         bx = (self.xs + dt * u).astype(np.float32)
         by = (self.ys + dt * v).astype(np.float32)
-        back = cv2.remap(fwd, bx, by, cv2.INTER_CUBIC, borderMode=cv2.BORDER_WRAP)
+        back = cv2.remap(fwd, bx, by, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
         corrected = fwd + 0.5 * (field - back)
         hi = cv2.dilate(fwd, self._k3)
         lo = cv2.erode(fwd, self._k3)
@@ -130,6 +168,19 @@ class FluidSim:
         self.u += eps * dt * (gy * curl)
         self.v += eps * dt * (-gx * curl)
 
+    def add_force(self, fu: np.ndarray, fv: np.ndarray) -> None:
+        self.u += fu.astype(np.float32)
+        self.v += fv.astype(np.float32)
+
+    def add_dye(self, px: float, py: float, radius: float,
+                color: np.ndarray, amount: float) -> None:
+        """Inject coloured dye (no velocity) — used by continuous emitters."""
+        n = self.n
+        r = max(1.0, radius * n)
+        d2 = (self.xs - px * n) ** 2 + (self.ys - py * n) ** 2
+        g = np.exp(-d2 / (2 * r * r)).astype(np.float32)
+        self.density += (amount * g)[..., None] * color[None, None, :]
+
     def add_splat(self, px: float, py: float, radius: float, force: float,
                   color: np.ndarray, dir_angle: float) -> None:
         """Inject a Gaussian blob of velocity + colour at normalised (px, py)."""
@@ -138,8 +189,9 @@ class FluidSim:
         r = max(1.0, radius * n)
         d2 = (self.xs - cx) ** 2 + (self.ys - cy) ** 2
         g = np.exp(-d2 / (2 * r * r)).astype(np.float32)
-        self.u += (g * force * np.cos(dir_angle) / n).astype(np.float32)
-        self.v += (g * force * np.sin(dir_angle) / n).astype(np.float32)
+        vel = g * force * FORCE_K / n
+        self.u += (vel * np.cos(dir_angle)).astype(np.float32)
+        self.v += (vel * np.sin(dir_angle)).astype(np.float32)
         self.density += g[..., None] * color[None, None, :]
 
     def step(self, dt: float, vort_eps: float) -> None:
@@ -160,7 +212,11 @@ class FluidSim:
         self._project()
         self.density = self._advect(self.density, self.u, self.v, dt)
         self.density *= self.dissipation
-        np.clip(self.density, 0.0, 4.0, out=self.density)
+        np.clip(self.density, 0.0, 12.0, out=self.density)
+        # Damp velocity so continuous ambient forcing reaches a steady state
+        # instead of accumulating without bound.
+        self.u *= self.vel_dissipation
+        self.v *= self.vel_dissipation
 
     def kinetic_energy(self) -> float:
         return float(np.mean(self.u ** 2 + self.v ** 2))
@@ -204,7 +260,8 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
     fps = score.audio.fps
     n_frames = score.n_frames if max_frames is None else min(score.n_frames, max_frames)
     fc = recipe.fluid
-    sim = FluidSim(fc.resolution, fc.dissipation, fc.viscosity, recipe.seed)
+    sim = FluidSim(fc.resolution, fc.dissipation, fc.viscosity, recipe.seed,
+                   vel_dissipation=fc.velocity_dissipation)
 
     low_cfg = fc.splats.get("low")
     high_cfg = fc.splats.get("high")
@@ -212,49 +269,72 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
     high_by_frame = _build_event_index(score.onsets.get("high", []), fps, n_frames)
 
     rng = np.random.default_rng(recipe.seed + 1)
+    palette = [_hex_to_rgb(c) for c in (fc.palette or ["#B84A74"])]
+    emitters = rng.uniform(0.14, 0.86, (max(1, fc.emitter_count), 2))
+    emit_colors = [palette[k % len(palette)] for k in range(len(emitters))]
+    gx = sim.xs / fc.resolution
+    gy = sim.ys / fc.resolution
     anchor = np.array([0.5, 0.5])           # centre of gravity for kicks
     dt = 1.0
     stats = {"kinetic_energy": [], "total_density": []}
 
     render_res = fc.render_resolution
+    bloom_sigma = max(1.0, fc.resolution / 48)
     for i in range(n_frames):
         fdata = score.frames[i]
-        hue = _centroid_to_hue(fdata.centroid_hz)
-        color = _hue_to_rgb(np.array([hue]))[0].astype(np.float32)
+        rms = fdata.rms
+        t = i * fc.ambient_speed
 
-        # Kicks: large, slow, anchored splats.
+        # (1) Ambient curl-noise: the fluid is ALWAYS moving; louder = stronger.
+        ua, va = _curl_noise(gx, gy, t, fc.ambient_scale)
+        amp = fc.ambient_strength * (0.45 + 0.9 * rms)
+        sim.add_force(ua * amp, va * amp)
+
+        # (2) Persistent dye emitters keep the frame full of moving colour.
+        amt = fc.emitter_rate * (0.5 + 1.3 * rms)
+        for k, (px, py) in enumerate(emitters):
+            jx = 0.06 * np.sin(t * 0.7 + k)
+            jy = 0.06 * np.cos(t * 0.5 + k * 1.3)
+            sim.add_dye(float(px + jx), float(py + jy), 0.06, emit_colors[k], amt)
+
+        # (3) Kicks: strong impulse + dye burst, anchored near the centre.
         if low_cfg:
             for e in low_by_frame[i]:
-                jitter = rng.normal(0, 0.04, 2)
+                jitter = rng.normal(0, 0.05, 2)
                 px, py = np.clip(anchor + jitter, 0.05, 0.95)
                 ang = rng.uniform(0, 2 * np.pi)
-                sim.add_splat(px, py, low_cfg.radius, low_cfg.force * (0.4 + e.mag),
-                              color * 1.2, ang)
-        # Hats: small, vivid, scattered "pop everywhere".
+                sim.add_splat(px, py, low_cfg.radius, low_cfg.force * (0.5 + e.mag),
+                              palette[0] * 1.6, ang)
+        # (4) Hats: small vivid swirls, "pop everywhere".
         if high_cfg:
-            hats = high_by_frame[i][: high_cfg.max_per_beat]
-            for e in hats:
-                px, py = rng.uniform(0.08, 0.92, 2)
+            for j, e in enumerate(high_by_frame[i][: high_cfg.max_per_beat]):
+                px, py = rng.uniform(0.1, 0.9, 2)
                 ang = rng.uniform(0, 2 * np.pi)
-                sim.add_splat(px, py, high_cfg.radius, high_cfg.force * (0.4 + e.mag),
-                              color, ang)
+                col = palette[(i + j) % len(palette)]
+                sim.add_splat(px, py, high_cfg.radius, high_cfg.force * (0.5 + e.mag),
+                              col * 1.3, ang)
 
-        # Lookahead: sub-visible swirl building tension before a drop.
+        # (5) Lookahead: sub-visible swirl building tension before a drop.
         boost = _lookahead_boost(score, i, fps, fc.lookahead_s)
         if boost > 0:
             for _ in range(2):
                 px, py = rng.uniform(0.2, 0.8, 2)
                 ang = rng.uniform(0, 2 * np.pi)
-                sim.add_splat(px, py, 0.10, 1200.0 * boost, color * 0.15 * boost, ang)
+                sim.add_splat(px, py, 0.12, 1600.0 * boost, palette[0] * 0.2 * boost, ang)
 
-        # RMS drives vorticity between recipe min/max.
+        # RMS drives vorticity between recipe min/max (scaled to the velocity regime).
         vmin, vmax = fc.vorticity.min, fc.vorticity.max
-        vort = vmin + (vmax - vmin) * fdata.rms
+        vort = (vmin + (vmax - vmin) * rms) * VORT_K
         sim.step(dt, vort)
 
-        # Render frame.
-        img = np.clip(sim.density, 0.0, 1.0)
-        frame = (img * 255).astype(np.uint8)
+        # Render: HDR density -> filmic tone-map + bloom over a dark field.
+        ldr = _tonemap(sim.density, fc.exposure)
+        if fc.bloom > 0:
+            bright = np.clip(ldr - 0.45, 0.0, 1.0)
+            bloom = cv2.GaussianBlur(bright, (0, 0), sigmaX=bloom_sigma)
+            ldr = ldr + fc.bloom * bloom
+        out = fc.background + (1.0 - fc.background) * np.clip(ldr, 0.0, 1.0)
+        frame = (np.clip(out, 0.0, 1.0) * 255).astype(np.uint8)
         if render_res != fc.resolution:
             frame = cv2.resize(frame, (render_res, render_res),
                                interpolation=cv2.INTER_LINEAR)

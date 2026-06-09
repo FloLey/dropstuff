@@ -53,7 +53,8 @@ class Vorticity:
 class FluidConfig:
     resolution: int = 256           # simulation grid (square)
     render_resolution: int = 512    # output frame size
-    dissipation: float = 0.99       # density decay per step
+    dissipation: float = 0.94       # density decay per step (balances emitters)
+    velocity_dissipation: float = 0.96   # velocity decay per step (bounds energy)
     viscosity: float = 0.0
     lookahead_s: float = 8.0
     splats: Dict[str, Splat] = field(default_factory=lambda: {
@@ -61,6 +62,18 @@ class FluidConfig:
         "high": Splat(radius=0.03, force=3500.0, placement="scatter", max_per_beat=5),
     })
     vorticity: Vorticity = field(default_factory=Vorticity)
+    # Continuous forcing so the fluid is *always* alive between onsets.
+    ambient_strength: float = 3.0       # curl-noise stirring amplitude (cells/frame)
+    ambient_scale: float = 2.6          # spatial frequency of the noise
+    ambient_speed: float = 0.16         # temporal evolution per frame
+    emitter_count: int = 6              # persistent dye sources
+    emitter_rate: float = 0.05          # dye injected per emitter per frame
+    # Rendering (HDR -> filmic), so the frame is beautiful on its own.
+    exposure: float = 1.7
+    bloom: float = 0.65
+    background: float = 0.04
+    palette: List[str] = field(default_factory=lambda: [
+        "#B84A74", "#34808A", "#E0A458", "#6C4A8C", "#3FA39B", "#D98A5E"])
 
 
 @dataclass

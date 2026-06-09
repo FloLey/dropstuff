@@ -4,7 +4,7 @@ seed: 4217
 fluid:
   resolution: 256
   render_resolution: 512
-  dissipation: 0.985
+  dissipation: 0.94
   lookahead_s: 8.0
   splats:
     low:  { radius: 0.12, force: 9000, placement: anchored }

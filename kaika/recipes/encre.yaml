@@ -4,8 +4,9 @@ seed: 1107
 fluid:
   resolution: 256
   render_resolution: 512
-  dissipation: 0.992
+  dissipation: 0.95
   lookahead_s: 6.0
+  palette: ["#1a1a1a", "#3a3a3a", "#5c5c5c", "#8a8a8a", "#c9c9c9"]
   splats:
     low:  { radius: 0.16, force: 7000, placement: anchored }
     high: { radius: 0.025, force: 2600, placement: scatter, max_per_beat: 7 }
