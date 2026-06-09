@@ -1,0 +1,49 @@
+{
+  "_about": "Representative ComfyUI vid2vid graph (Wan 2.2 / VACE family). Sentinel tokens (PROMPT, NEGATIVE, SEED, DENOISE, CONTROL_VIDEO, OUTPUT_PREFIX) are patched per chunk by ComfyDiffuser. Replace node set with the real Wan VACE nodes for your model build.",
+  "1": {
+    "class_type": "LoadVideo",
+    "_meta": {"title": "control video"},
+    "inputs": {"video": "CONTROL_VIDEO"}
+  },
+  "2": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {"ckpt_name": "wan2.2-vace.safetensors"}
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "positive"},
+    "inputs": {"text": "PROMPT", "clip": ["2", 1]}
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {"title": "negative"},
+    "inputs": {"text": "NEGATIVE", "clip": ["2", 1]}
+  },
+  "5": {
+    "class_type": "VAEEncode",
+    "inputs": {"pixels": ["1", 0], "vae": ["2", 2]}
+  },
+  "6": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": "SEED",
+      "steps": 20,
+      "cfg": 6.5,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": "DENOISE",
+      "model": ["2", 0],
+      "positive": ["3", 0],
+      "negative": ["4", 0],
+      "latent_image": ["5", 0]
+    }
+  },
+  "7": {
+    "class_type": "VAEDecode",
+    "inputs": {"samples": ["6", 0], "vae": ["2", 2]}
+  },
+  "8": {
+    "class_type": "SaveImage",
+    "inputs": {"images": ["7", 0], "filename_prefix": "OUTPUT_PREFIX"}
+  }
+}
