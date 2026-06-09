@@ -40,6 +40,16 @@ def test_canny_is_binary(track_wav, tmp_path):
     assert set(np.unique(img)).issubset({0, 255})
 
 
+def test_depth_normalization_is_global_not_per_frame(track_wav, tmp_path):
+    """With clip-global scaling, frames keep their relative brightness instead
+    of each saturating to 255 — that's what removes inter-frame flicker."""
+    sim = _prep(track_wav, tmp_path, frames=12)
+    res = generate_control(sim.fluid_dir, sim.velocity_dir, tmp_path, signals=["depth"])
+    maxes = [int(imageio.imread(p).max())
+             for p in sorted(res.dirs["depth"].glob("*.png"))]
+    assert len(set(maxes)) > 1            # not every frame normalised to its own max
+
+
 def test_flow_matches_render_size(track_wav, tmp_path):
     sim = _prep(track_wav, tmp_path)
     res = generate_control(sim.fluid_dir, sim.velocity_dir, tmp_path,

@@ -62,25 +62,17 @@ def test_deterministic(track_wav, tmp_path):
 
 
 def _divergence(u, v):
-    return ((np.roll(u, -1, 1) - np.roll(u, 1, 1)) +
-            (np.roll(v, -1, 0) - np.roll(v, 1, 0))) * 0.5
+    # forward-difference divergence — the operator the projection drives to zero
+    return (np.roll(u, -1, 1) - u) + (np.roll(v, -1, 0) - v)
 
 
-def _project_div(seed_force_args, iters):
+def test_projection_makes_incompressible():
+    """The spectral (FFT) projection solves the Poisson system exactly, so a
+    single call must drive the velocity field's divergence to ~zero."""
     sim = FluidSim(n=32, dissipation=0.99, viscosity=0.0, seed=1)
-    sim.add_splat(*seed_force_args)
-    sim._project(iters=iters)
-    return np.abs(_divergence(sim.u, sim.v)).mean()
-
-
-def test_projection_converges():
-    """The pressure solve must monotonically reduce divergence as the Poisson
-    solver iterates — proof it is actually solving for incompressibility."""
-    args = (0.5, 0.5, 0.1, 8000.0, np.array([1.0, 0.2, 0.5]), 0.7)
-    sim = FluidSim(n=32, dissipation=0.99, viscosity=0.0, seed=1)
-    sim.add_splat(*args)
+    sim.add_splat(0.5, 0.5, 0.1, 8000.0, np.array([1.0, 0.2, 0.5]), 0.7)
     before = np.abs(_divergence(sim.u, sim.v)).mean()
-    d_few = _project_div(args, iters=5)
-    d_many = _project_div(args, iters=120)
-    assert d_few < before          # any projection reduces divergence
-    assert d_many < d_few          # more iterations -> closer to divergence-free
+    sim._project()
+    after = np.abs(_divergence(sim.u, sim.v)).mean()
+    assert before > 1e-2                  # the splat created real divergence
+    assert after < before * 1e-3          # one FFT solve ~ machine-exact

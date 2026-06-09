@@ -20,7 +20,6 @@ from typing import Callable, List, Optional
 
 import numpy as np
 import cv2
-from scipy.ndimage import map_coordinates
 
 from .score import Score
 from .recipe import Recipe
@@ -73,29 +72,50 @@ class FluidSim:
         ys, xs = np.mgrid[0:n, 0:n]
         self.xs = xs.astype(np.float32)
         self.ys = ys.astype(np.float32)
+        # Eigenvalues of the 5-point Poisson operator for the exact FFT solve.
+        i = np.arange(n)
+        a = (4.0 - 2 * np.cos(2 * np.pi * i / n)[:, None]
+             - 2 * np.cos(2 * np.pi * i / n)[None, :])
+        a[0, 0] = 1.0                       # guard DC; mean pressure is gauge-free
+        self._poisson = a
+        self._k3 = np.ones((3, 3), np.uint8)
 
     # ---- operators ---------------------------------------------------------
-    def _advect(self, field: np.ndarray, dt: float) -> np.ndarray:
-        bx = (self.xs - dt * self.u) % self.n
-        by = (self.ys - dt * self.v) % self.n
-        if field.ndim == 2:
-            return map_coordinates(field, [by, bx], order=1, mode="grid-wrap")
-        out = np.empty_like(field)
-        for c in range(field.shape[2]):
-            out[..., c] = map_coordinates(field[..., c], [by, bx], order=1,
-                                          mode="grid-wrap")
-        return out
+    def _advect(self, field: np.ndarray, u: np.ndarray, v: np.ndarray,
+                dt: float) -> np.ndarray:
+        """MacCormack advection (cubic semi-Lagrangian + error correction).
 
-    def _project(self, iters: int = 20) -> None:
-        n = self.n
-        div = -0.5 * ((np.roll(self.u, -1, 1) - np.roll(self.u, 1, 1)) +
-                      (np.roll(self.v, -1, 0) - np.roll(self.v, 1, 0))) / n
-        p = np.zeros_like(div)
-        for _ in range(iters):
-            p = (div + np.roll(p, 1, 1) + np.roll(p, -1, 1) +
-                 np.roll(p, 1, 0) + np.roll(p, -1, 0)) / 4.0
-        self.u -= 0.5 * n * (np.roll(p, -1, 1) - np.roll(p, 1, 1))
-        self.v -= 0.5 * n * (np.roll(p, -1, 0) - np.roll(p, 1, 0))
+        Two cubic backtraces with a corrector pass remove most numerical
+        diffusion, keeping crisp filaments; a min/max limiter clamps overshoot.
+        Handles 1- or multi-channel fields in a single ``cv2.remap`` call.
+        """
+        mx = (self.xs - dt * u).astype(np.float32)
+        my = (self.ys - dt * v).astype(np.float32)
+        fwd = cv2.remap(field, mx, my, cv2.INTER_CUBIC, borderMode=cv2.BORDER_WRAP)
+        bx = (self.xs + dt * u).astype(np.float32)
+        by = (self.ys + dt * v).astype(np.float32)
+        back = cv2.remap(fwd, bx, by, cv2.INTER_CUBIC, borderMode=cv2.BORDER_WRAP)
+        corrected = fwd + 0.5 * (field - back)
+        hi = cv2.dilate(fwd, self._k3)
+        lo = cv2.erode(fwd, self._k3)
+        return np.clip(corrected, lo, hi).astype(np.float32)
+
+    def _project(self, iters: int = 0) -> None:
+        """Exact incompressibility via a spectral Poisson solve (periodic grid).
+
+        Solves the same discrete system the old Jacobi loop approximated, but in
+        one FFT pair — divergence drops to ~machine epsilon, so vortices rotate
+        and persist instead of diffusing. ``iters`` kept for API compatibility.
+        """
+        # Forward-difference divergence; backward-difference gradient (adjoint
+        # pair) so D∘G is the standard 5-point Laplacian -> exact, no checkerboard.
+        div = ((np.roll(self.u, -1, 1) - self.u) +
+               (np.roll(self.v, -1, 0) - self.v))
+        p_hat = -np.fft.fft2(div) / self._poisson    # L = -poisson eigenvalues
+        p_hat[0, 0] = 0.0
+        p = np.real(np.fft.ifft2(p_hat)).astype(np.float32)
+        self.u -= (p - np.roll(p, 1, 1)).astype(np.float32)
+        self.v -= (p - np.roll(p, 1, 0)).astype(np.float32)
 
     def _vorticity_confine(self, eps: float, dt: float) -> None:
         if eps <= 0:
@@ -131,10 +151,14 @@ class FluidSim:
                       np.roll(self.v, 1, 1) + np.roll(self.v, -1, 1))) / (1 + 4 * k)
         self._vorticity_confine(vort_eps, dt)
         self._project()
-        self.u = self._advect(self.u, dt)
-        self.v = self._advect(self.v, dt)
+        # Self-advect velocity (backtrace uses the pre-advection field), reproject.
+        u0, v0 = self.u.copy(), self.v.copy()
+        vel = np.stack([self.u, self.v], axis=-1).astype(np.float32)
+        vel = self._advect(vel, u0, v0, dt)
+        self.u = np.ascontiguousarray(vel[..., 0])
+        self.v = np.ascontiguousarray(vel[..., 1])
         self._project()
-        self.density = self._advect(self.density, dt)
+        self.density = self._advect(self.density, self.u, self.v, dt)
         self.density *= self.dissipation
         np.clip(self.density, 0.0, 4.0, out=self.density)
 
