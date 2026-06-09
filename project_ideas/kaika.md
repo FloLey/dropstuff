@@ -83,7 +83,7 @@ E5 post         RIFE + upscale + mux ─▶ kaika_final.mp4
 
 **in** `track.wav` / `track.mp3` · **out** `score.json`
 
-Analyse hors-ligne complète avec `librosa`. Le `hop_length` est calé sur le framerate vidéo cible (`hop = sr / fps`) pour que chaque frame vidéo ait sa ligne de données audio, sans interpolation.
+Analyse hors-ligne complète avec `librosa`. Le `hop_length` doit être un entier calé au plus près du framerate vidéo cible (`hop = int(round(sr / fps))`) pour que chaque frame vidéo ait sa ligne de données audio, sans interpolation. Attention aux couples `sr`/`fps` qui ne se divisent pas exactement (ex. 44100 Hz / 24 fps = 1837,5) : l'arrondi cumule une dérive temporelle au fil du morceau. Mitigation : imposer un ré-échantillonnage vers un couple compatible (48000 Hz / 24 fps → hop exact de 2000), ou compenser la dérive en ré-alignant périodiquement l'index de frame sur le temps réel.
 
 | Signal | Méthode | Usage en aval |
 | --- | --- | --- |
@@ -155,6 +155,8 @@ Transformation vid2vid dans **ComfyUI**, modèle de départ **Wan 2.2** (famille
 
 **Infra** : GPU loué à l'heure (Vast.ai / RunPod, RTX 5090 ou A100 selon la taille du modèle), provisionné par un script (image Docker avec ComfyUI + modèles, montage du dossier `control/`, rendu, rapatriement). Ordre de grandeur attendu : quelques heures de GPU par clip de 3 minutes, soit quelques euros par rendu complet. Toutes les itérations esthétiques se font sur des extraits de 10 s.
 
+**Transfert** : un clip de 3 min à 24 fps = ~4300 frames × plusieurs flux (depth, canny, flow + frames stylisées en retour), soit plusieurs Go de PNG individuels — goulot d'étranglement majeur sur une connexion domestique. On ne transfère donc jamais les frames une à une : chaque séquence de contrôle est encodée dans un conteneur vidéo temporaire à haut débit (H.264/HEVC quasi-sans perte, `-crf` bas, YUV444p quand le contrôle l'exige) avant upload, ré-extraite côté GPU, puis le résultat est ré-encodé en vidéo pour le rapatriement. La compression réduit drastiquement la taille et le temps de transfert.
+
 **Validation rapide avant d'investir** : passer un extrait de fluide dans un outil commercial de restyle (Runway) pour valider que l'esthétique fluide→fleurs fonctionne, avant de monter le workflow open source.
 
 **Done quand :** un extrait de 10 s tient visuellement : les fleurs suivent le mouvement du fluide, les coutures de chunks sont invisibles à vitesse réelle.
@@ -165,7 +167,7 @@ Transformation vid2vid dans **ComfyUI**, modèle de départ **Wan 2.2** (famille
 
 - **Interpolation RIFE** si E4 a généré à 12 ou 16 fps (économie de GPU) : remontée à 24 ou 48 fps.
 - **Upscale** Real-ESRGAN ou équivalent vers 2048², puis crop/letterbox vers le format de diffusion (carré pour Instagram, 16:9 sinon).
-- **Mux ffmpeg** de l'audio original, avec vérification automatique de l'offset (corrélation entre l'enveloppe RMS et la luminance moyenne des frames : si la sync dérive, ça se mesure).
+- **Mux ffmpeg** de l'audio original, avec vérification automatique de l'offset. La corrélation se fait entre l'enveloppe RMS de l'audio et l'énergie cinétique (ou la densité globale) de la simulation de fluide E2 — signal directement et déterministement piloté par l'audio — et non avec la luminance des frames stylisées, qui dépend trop du prompt et de la palette (un drop intense peut être visuellement sombre). Si la sync dérive, ça se mesure de façon fiable.
 - Optionnel : grain léger et vignettage pour fondre les artefacts de diffusion.
 
 ---
@@ -195,12 +197,15 @@ diffusion:
   overlap_frames: 24
 
 prompts:
-  base: "macro photography, botanical, dark background, soft light"
+  base: "macro photography, botanical, dark background, soft light"  # modificateur global, préfixé à chaque section
   intro: "closed flower buds emerging from black water, mist"
   build: "buds swelling, petals straining, tension"
   drop:  "explosive bloom of peonies, petals suspended mid-air"
   outro: "petals dissolving back into dark water"
+  default: "botanical organic forms, abstract motion"  # repli si le label de section est inconnu
 ```
+
+Le prompt effectif d'une section est `"{base}, {section}"` ; `base` est donc systématiquement préfixé. Si le label d'une section détectée dans `score.json` (ex. `verse`) n'a pas de clé dédiée, on retombe sur `default` — le pipeline ne casse jamais sur un label imprévu.
 
 ---
 
