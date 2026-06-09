@@ -115,7 +115,7 @@ def _merge(default, data):
     kwargs = {}
     for f in default.__dataclass_fields__.values():
         cur = getattr(default, f.name)
-        if f.name in data:
+        if f.name in data and data[f.name] is not None:
             val = data[f.name]
             if f.name == "splats" and isinstance(val, dict):
                 kwargs[f.name] = {k: Splat(**v) for k, v in val.items()}

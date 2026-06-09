@@ -173,7 +173,11 @@ def create_app(runs_root: str | Path = "runs",
     def run_file(run_id: str, subpath: str):
         rd = (runs_root / run_id).resolve()
         target = (rd / subpath).resolve()
-        if not str(target).startswith(str(rd)) or not target.is_file():
+        try:
+            target.relative_to(rd)          # strict subpath, prefix-safe
+        except ValueError:
+            raise HTTPException(404, "file not found")
+        if not target.is_file():
             raise HTTPException(404, "file not found")
         return FileResponse(target)
 

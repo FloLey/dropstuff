@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 import numpy as np
+import cv2
 from scipy.ndimage import map_coordinates
 
 from .score import Score
@@ -155,6 +156,8 @@ def _build_event_index(events, fps: int, n_frames: int) -> List[list]:
 
 def _lookahead_boost(score: Score, frame_i: int, fps: int, lookahead_s: float) -> float:
     """0..1 tension ramp in the ``lookahead_s`` window before a drop section."""
+    if lookahead_s <= 0:
+        return 0.0
     t = frame_i / fps
     boost = 0.0
     for s in score.sections:
@@ -229,7 +232,6 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
         img = np.clip(sim.density, 0.0, 1.0)
         frame = (img * 255).astype(np.uint8)
         if render_res != fc.resolution:
-            import cv2
             frame = cv2.resize(frame, (render_res, render_res),
                                interpolation=cv2.INTER_LINEAR)
         imageio.imwrite(fluid_dir / f"{i:06d}.png", frame)

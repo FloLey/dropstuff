@@ -21,7 +21,7 @@ from .media import run_ffmpeg, _EVEN
 ASPECT_FILTERS = {
     "square": None,
     "wide": "scale=trunc(iw/2)*2:trunc(ih/2)*2,"
-            "pad=ih*16/9:ih:(ow-iw)/2:0:black,setsar=1",
+            "pad=trunc(ih*16/9/2)*2:ih:(ow-iw)/2:0:black,setsar=1",
 }
 
 
@@ -87,12 +87,15 @@ def assemble(frames_dir: str | Path, audio_path: str | Path, out_path: str | Pat
     aspect_filter = ASPECT_FILTERS.get(aspect)
     vf.append(aspect_filter if aspect_filter else _EVEN)
 
+    has_audio = Path(audio_path).exists()
     args = ["-framerate", str(fps), "-i", str(frames_dir / pattern)]
-    if Path(audio_path).exists():
-        args += ["-i", str(audio_path)]
+    if has_audio:
+        args += ["-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0"]
+    else:
+        args += ["-map", "0:v:0"]
     args += ["-vf", ",".join(vf), "-r", str(out_fps),
              "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18"]
-    if Path(audio_path).exists():
+    if has_audio:
         args += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
     args += [str(out_path)]
     run_ffmpeg(args)
