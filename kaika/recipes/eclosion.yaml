@@ -1,0 +1,33 @@
+name: eclosion
+seed: 4217
+
+fluid:
+  resolution: 256
+  render_resolution: 512
+  dissipation: 0.985
+  lookahead_s: 8.0
+  splats:
+    low:  { radius: 0.12, force: 9000, placement: anchored }
+    high: { radius: 0.03, force: 3500, placement: scatter, max_per_beat: 5 }
+  vorticity: { min: 8, max: 38, driver: rms }
+
+diffusion:
+  model: wan-2.2-vace
+  backend: local
+  strength: 0.5
+  control: [depth, flow]
+  chunk_s: 5.0
+  overlap_frames: 24
+
+post:
+  fps: 24
+  aspect: square
+
+prompts:
+  base: "macro photography, botanical, dark background, soft light"
+  intro: "closed flower buds emerging from black water, mist"
+  build: "buds swelling, petals straining, tension"
+  drop:  "explosive bloom of peonies, petals suspended mid-air"
+  verse: "slow drifting petals, calm water"
+  outro: "petals dissolving back into dark water"
+  default: "botanical organic forms, abstract motion"
