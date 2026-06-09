@@ -35,6 +35,9 @@ kaika = "kaika.cli:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/kaika"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"recipes" = "kaika/recipes"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

@@ -13,9 +13,25 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Dict, List
 
+import os
+
 import yaml
 
-RECIPES_DIR = Path(__file__).resolve().parents[3] / "recipes"
+
+def _find_recipes_dir() -> Path:
+    """Locate recipes for both editable (repo) and wheel (packaged) installs."""
+    env = os.environ.get("KAIKA_RECIPES")
+    candidates = [Path(env)] if env else []
+    pkg = Path(__file__).resolve().parents[1]          # .../kaika
+    candidates += [pkg / "recipes",                    # packaged (wheel)
+                   Path(__file__).resolve().parents[3] / "recipes"]  # repo (dev)
+    for c in candidates:
+        if c.is_dir():
+            return c
+    return candidates[-1]
+
+
+RECIPES_DIR = _find_recipes_dir()
 
 
 @dataclass
