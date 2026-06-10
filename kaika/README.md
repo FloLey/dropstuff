@@ -65,10 +65,23 @@ Five stages in a chain, each with files on disk, each independently testable.
 `kaika serve` runs FastAPI + a single-worker job queue + SQLite + WebSocket
 progress, and serves the React/Vite/TS frontend. Three screens:
 
-1. **Studio** — drop audio, see the annotated waveform (beats/onsets/sections),
-   edit the recipe (sliders + prompts), drag-select an extract, render.
-2. **Render** — the five stages live, with progress and the result player.
+1. **Studio** — drop audio; analysis splits it into **editable segments**. Click
+   a segment to set *its* prompt and *its* fluid parameters (vorticity, kick/hat
+   emit, ambient stir). Then **Preview fluid** (no GPU) to iterate on the motion.
+2. **Render** — the stages live with progress; watch the fluid preview, and when
+   the motion is right, **Generate** runs the diffusion to the final clip.
 3. **Gallery** — every run, replayable, with its frozen recipe and sync info.
+
+### Projects & staged rendering
+
+A **Project** (`runs/<id>/project.json`) is the mutable working doc: the track's
+segments, each with a prompt and partial fluid overrides. A single *continuous*
+simulation reads these per-frame, so parameters vary by segment without breaking
+the flow. The pipeline runs in two resumable stages:
+
+- **fluid** (`run_fluid`) — E1+E2+E3 + a previewable fluid MP4. Fast, no GPU.
+- **diffuse** (`run_diffuse`) — E4+E5, resuming the cached fluid with the
+  project's per-segment prompts.
 
 Nothing the UI shows is hidden state: runs live on disk under `runs/`.
 
