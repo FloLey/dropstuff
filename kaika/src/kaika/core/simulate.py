@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, List, Optional
 
 import numpy as np
@@ -86,7 +87,8 @@ def _curl_noise(gx: np.ndarray, gy: np.ndarray, t: float, scale: float):
 
 @dataclass
 class _Source:
-    """A transient dye source: born on a musical event, emits, then dies."""
+    """A transient, directional dye source: born on a musical event, it streams
+    matter along its heading (jet + self-propulsion), then fades and dies."""
     x: float
     y: float
     color: np.ndarray
@@ -94,6 +96,10 @@ class _Source:
     emit: float
     life: int
     drift: float
+    dx: float
+    dy: float
+    speed: float
+    jet: float
     age: int = 0
 
 
@@ -194,6 +200,16 @@ class FluidSim:
         g = np.exp(-d2 / (2 * r * r)).astype(np.float32)
         self.density += (amount * g)[..., None] * color[None, None, :]
 
+    def add_force_at(self, x: float, y: float, radius: float,
+                     fx: float, fy: float) -> None:
+        """Inject a localised directional velocity (no dye) — drives jets."""
+        n = self.n
+        r = max(1.0, radius * n)
+        d2 = (self.xs - x * n) ** 2 + (self.ys - y * n) ** 2
+        g = np.exp(-d2 / (2 * r * r)).astype(np.float32)
+        self.u += (g * fx).astype(np.float32)
+        self.v += (g * fy).astype(np.float32)
+
     def add_splat(self, px: float, py: float, radius: float, force: float,
                   color: np.ndarray, dir_angle: float) -> None:
         """Inject a Gaussian blob of velocity + colour at normalised (px, py)."""
@@ -290,13 +306,17 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
     stats = {"kinetic_energy": [], "total_density": []}
     sources: List[_Source] = []
 
-    def spawn(x, y, color, radius, emit, life_s, drift, force, mag):
-        """Birth a transient source: a velocity/dye puff now + ongoing emission."""
-        ang = rng.uniform(0, 2 * np.pi)
-        sim.add_splat(x, y, radius, force * (0.5 + mag), color * 1.4, ang)
-        sources.append(_Source(x=x, y=y, color=color, radius=radius,
-                               emit=emit * (0.5 + mag), life=max(1, int(life_s * fps)),
-                               drift=drift))
+    def spawn(x, y, color, cfg, mag, angle):
+        """Birth a directional source: an initial jet along ``angle`` + ongoing
+        directional emission, so matter streams away instead of pooling."""
+        dx, dy = float(np.cos(angle)), float(np.sin(angle))
+        impulse = cfg.force * FORCE_K / n * (0.5 + mag)
+        sim.add_force_at(x, y, cfg.radius, dx * impulse, dy * impulse)
+        sources.append(_Source(x=x, y=y, color=color, radius=cfg.radius,
+                               emit=cfg.emit * (0.5 + mag),
+                               life=max(1, int(cfg.lifetime_s * fps)),
+                               drift=cfg.drift, dx=dx, dy=dy, speed=cfg.speed,
+                               jet=0.35 * impulse))
 
     render_res = fc.render_resolution
     bloom_sigma = max(1.0, fc.resolution / 48)
@@ -311,43 +331,43 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
         amp = fc.ambient_strength * (0.12 + 0.88 * rms)
         sim.add_force(ua * amp, va * amp)
 
-        # Kicks: a puff near a slowly-wandering centre of gravity (so successive
-        # kicks land in different spots instead of stacking into one blob).
+        # Kicks: jets radiating OUTWARD from a slowly-wandering centre of gravity,
+        # so matter streams away and disperses instead of pooling into a blob.
+        wc = anchor + 0.16 * np.array([np.sin(i * 0.045), np.cos(i * 0.037)])
         if low_cfg:
-            wander = anchor + 0.16 * np.array([np.sin(i * 0.045), np.cos(i * 0.037)])
             for e in low_by_frame[i]:
-                px, py = np.clip(wander + rng.normal(0, 0.09, 2), 0.05, 0.95)
-                spawn(float(px), float(py), palette[0], low_cfg.radius,
-                      low_cfg.emit, low_cfg.lifetime_s, low_cfg.drift,
-                      low_cfg.force, e.mag)
-        # Hats: small, short-lived sources that pop everywhere then vanish.
+                px, py = np.clip(wc + rng.normal(0, 0.09, 2), 0.05, 0.95)
+                ang = np.arctan2(py - wc[1], px - wc[0]) + rng.normal(0, 0.5)
+                spawn(float(px), float(py), palette[0], low_cfg, e.mag, float(ang))
+        # Hats: small fast darts in random directions, popping everywhere.
         if high_cfg:
             for j, e in enumerate(high_by_frame[i][: high_cfg.max_per_beat]):
                 px, py = rng.uniform(0.08, 0.92, 2)
                 spawn(float(px), float(py), palette[(i + j) % len(palette)],
-                      high_cfg.radius, high_cfg.emit, high_cfg.lifetime_s,
-                      high_cfg.drift, high_cfg.force, e.mag)
+                      high_cfg, e.mag, float(rng.uniform(0, 2 * np.pi)))
 
-        # Lookahead: faint sources spawn before a drop, building tension early.
+        # Lookahead: faint drifting sources before a drop, building tension early.
         boost = _lookahead_boost(score, i, fps, fc.lookahead_s)
         if boost > 0 and i % 3 == 0:
             px, py = rng.uniform(0.2, 0.8, 2)
-            spawn(float(px), float(py), palette[0] * 0.5, 0.10,
-                  0.10 * boost, 0.7, 0.5, 1500.0 * boost, 0.0)
+            la = SimpleNamespace(radius=0.08, force=1500.0 * boost, emit=0.10 * boost,
+                                 lifetime_s=0.7, drift=0.6, speed=0.8)
+            spawn(float(px), float(py), palette[0] * 0.6, la, 1.0,
+                  float(rng.uniform(0, 2 * np.pi)))
 
-        # Emit from every living source: bright at birth, decaying immediately,
-        # expanding as it ages (a puff that blooms outward and fades). Drift, age out.
+        # Each living source streams matter ALONG its heading: dye + a directional
+        # jet (not an isotropic blob), then self-propels and is carried by the flow.
         still: List[_Source] = []
         for s in sources:
             frac = s.age / s.life
             env = (1.0 - frac) ** 1.3                 # impulsive: peak at birth -> 0
-            r_now = s.radius * (1.0 + 1.8 * frac)      # expand while fading
+            r_now = s.radius * (1.0 + 0.8 * frac)
             sim.add_dye(s.x, s.y, r_now, s.color, s.emit * env)
-            if s.drift > 0:
-                xi = int(np.clip(s.x * n, 0, n - 1))
-                yi = int(np.clip(s.y * n, 0, n - 1))
-                s.x = (s.x + s.drift * float(sim.u[yi, xi]) / n) % 1.0
-                s.y = (s.y + s.drift * float(sim.v[yi, xi]) / n) % 1.0
+            sim.add_force_at(s.x, s.y, r_now, s.dx * s.jet * env, s.dy * s.jet * env)
+            xi = int(np.clip(s.x * n, 0, n - 1))
+            yi = int(np.clip(s.y * n, 0, n - 1))
+            s.x = (s.x + (s.speed * s.dx + s.drift * float(sim.u[yi, xi])) / n) % 1.0
+            s.y = (s.y + (s.speed * s.dy + s.drift * float(sim.v[yi, xi])) / n) % 1.0
             s.age += 1
             if s.age < s.life:
                 still.append(s)

@@ -43,6 +43,7 @@ class Splat:
     lifetime_s: float = 0.5         # how long a spawned source lives, then dies
     emit: float = 0.2               # peak dye emission while alive
     drift: float = 0.4              # how strongly the source is carried by the flow
+    speed: float = 1.5              # self-propulsion along its direction (cells/frame)
 
 
 @dataclass
@@ -61,10 +62,10 @@ class FluidConfig:
     viscosity: float = 0.0
     lookahead_s: float = 8.0
     splats: Dict[str, Splat] = field(default_factory=lambda: {
-        "low": Splat(radius=0.12, force=9000.0, placement="anchored",
-                     lifetime_s=0.8, emit=0.22, drift=0.7),
+        "low": Splat(radius=0.10, force=9000.0, placement="anchored",
+                     lifetime_s=0.8, emit=0.22, drift=0.7, speed=1.3),
         "high": Splat(radius=0.03, force=3500.0, placement="scatter",
-                      max_per_beat=5, lifetime_s=0.3, emit=0.11, drift=0.3),
+                      max_per_beat=5, lifetime_s=0.3, emit=0.11, drift=0.3, speed=2.6),
     })
     vorticity: Vorticity = field(default_factory=Vorticity)
     # Gentle, RMS-driven ambient stirring so calm passages drift and loud ones
