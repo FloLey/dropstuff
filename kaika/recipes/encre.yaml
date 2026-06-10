@@ -1,0 +1,34 @@
+name: encre
+seed: 1107
+
+fluid:
+  resolution: 256
+  render_resolution: 512
+  dissipation: 0.92
+  lookahead_s: 6.0
+  palette: ["#2a2a2a", "#4a4a4a", "#6c6c6c", "#9a9a9a", "#d9d9d9"]
+  splats:
+    low:  { radius: 0.16, force: 7000, placement: anchored, lifetime_s: 1.4, emit: 0.16, drift: 0.7 }
+    high: { radius: 0.025, force: 2600, placement: scatter, max_per_beat: 7, lifetime_s: 0.25, emit: 0.10, drift: 0.3 }
+  vorticity: { min: 4, max: 24, driver: rms }
+
+diffusion:
+  model: wan-2.2-vace
+  backend: local
+  strength: 0.45
+  control: [depth, flow]
+  chunk_s: 5.0
+  overlap_frames: 24
+
+post:
+  fps: 24
+  aspect: square
+
+prompts:
+  base: "black ink diffusing in water, sumi-e, monochrome, high contrast"
+  intro: "a single drop of ink hitting still water"
+  build: "ink tendrils reaching, gathering"
+  drop:  "violent bloom of black ink, fractal plumes"
+  verse: "slow ink drift, grey washes"
+  outro: "ink settling, clearing water"
+  default: "ink in water, abstract"
