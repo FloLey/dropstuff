@@ -53,6 +53,13 @@ def _hex_to_rgb(h: str) -> np.ndarray:
     return np.array([int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)], np.float32)
 
 
+def _centroid_brightness(centroid_hz: float) -> float:
+    """Spectral centroid -> brightness multiplier (dark lows, bright highs)."""
+    lo, hi = np.log10(150.0), np.log10(8000.0)
+    x = (np.log10(max(centroid_hz, 150.0)) - lo) / (hi - lo)
+    return 0.75 + 0.5 * float(np.clip(x, 0.0, 1.0))
+
+
 def _tonemap(hdr: np.ndarray, exposure: float) -> np.ndarray:
     """HDR density -> filmic LDR: exponential exposure + mild gamma."""
     mapped = 1.0 - np.exp(-exposure * np.clip(hdr, 0.0, None))
@@ -343,6 +350,7 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
     anchor = np.array([0.5, 0.5])           # centre of gravity for kicks
     dt = 1.0
     t_phase = 0.0                           # continuous ambient phase across segments
+    hat_counter = 0                         # orderly palette cycling for hats
     stats = {"kinetic_energy": [], "total_density": []}
     sources: List[_Source] = []
 
@@ -389,11 +397,17 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
                 ang = np.arctan2(py - wc[1], px - wc[0]) + rng.normal(0, KICK_ANGLE_JITTER)
                 spawn(float(px), float(py), palette[0], low_cfg, e.mag, float(ang))
         # Hats: small fast darts in random directions, popping everywhere.
+        # Colour is intentional: kicks own palette[0]; hats cycle the rest in
+        # order, brightness following the spectral centroid (dark lows, bright highs).
         if high_cfg:
-            for j, e in enumerate(high_by_frame[i][: high_cfg.max_per_beat]):
+            bright = _centroid_brightness(fdata.centroid_hz)
+            hat_colors = palette[1:] or palette
+            for e in high_by_frame[i][: high_cfg.max_per_beat]:
                 px, py = rng.uniform(0.08, 0.92, 2)
-                spawn(float(px), float(py), palette[(i + j) % len(palette)],
-                      high_cfg, e.mag, float(rng.uniform(0, 2 * np.pi)))
+                color = hat_colors[hat_counter % len(hat_colors)] * bright
+                hat_counter += 1
+                spawn(float(px), float(py), color, high_cfg, e.mag,
+                      float(rng.uniform(0, 2 * np.pi)))
 
         # Lookahead: faint drifting sources before a drop, building tension early.
         boost = _lookahead_boost(score, i, fps, fc.lookahead_s)

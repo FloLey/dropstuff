@@ -29,7 +29,13 @@ def _normalise(x: np.ndarray) -> np.ndarray:
 
 
 def _band_onsets(S_band: np.ndarray, sr: int, hop: int) -> List[Event]:
-    """Detect onsets within a single frequency band's magnitude spectrogram."""
+    """Detect onsets within a single frequency band's magnitude spectrogram.
+
+    The band is expected to be the *percussive* HPSS component: sustained tones
+    are already removed, so each detection corresponds to a real hit. Peak
+    picking is kept strict (delta/wait) — every onset spawns a visual source,
+    so over-triggering turns rhythm into noise.
+    """
     if S_band.shape[0] == 0:
         return []
     env = librosa.onset.onset_strength(S=librosa.amplitude_to_db(S_band, ref=np.max),
@@ -37,7 +43,7 @@ def _band_onsets(S_band: np.ndarray, sr: int, hop: int) -> List[Event]:
     if env.max() <= 0:
         return []
     frames = librosa.onset.onset_detect(onset_envelope=env, sr=sr, hop_length=hop,
-                                        backtrack=False)
+                                        backtrack=False, delta=0.10, wait=4)
     if len(frames) == 0:
         return []
     times = librosa.frames_to_time(frames, sr=sr, hop_length=hop)
@@ -118,10 +124,16 @@ def analyze(audio_path: str | Path, fps: int = 24,
     beats = [Event(t=round(float(t), 3), mag=round(float(s), 3))
              for t, s in zip(beat_times, beat_strength)]
 
+    # HPSS: detect hits on the percussive component only, so pads/sustained
+    # tones don't masquerade as onsets (each onset spawns a visual source).
+    try:
+        S_perc = librosa.decompose.hpss(S)[1]
+    except Exception:
+        S_perc = S
     onsets = {
-        "low": _band_onsets(S[low_mask], sr, hop),
-        "mid": _band_onsets(S[mid_mask], sr, hop),
-        "high": _band_onsets(S[high_mask], sr, hop),
+        "low": _band_onsets(S_perc[low_mask], sr, hop),
+        "mid": _band_onsets(S_perc[mid_mask], sr, hop),
+        "high": _band_onsets(S_perc[high_mask], sr, hop),
     }
 
     # Structural sections via agglomerative clustering on chroma+mfcc.

@@ -40,6 +40,26 @@ def test_frame_configs_apply_segment_overrides(track_wav):
     assert cfgs[0].vorticity.min == 8            # partial override kept min
 
 
+def test_frame_configs_smooth_across_boundary(track_wav):
+    """Numeric params glide over SMOOTH_S at a boundary instead of jumping."""
+    from kaika.core.project import Segment
+    score = analyze(track_wav, fps=24)
+    dur = score.audio.duration_s
+    rec = R.from_dict({"fluid": {"vorticity": {"min": 8, "max": 20}}})
+    proj = Project(audio="t.wav", recipe=rec, fps=24, segments=[
+        Segment(start=0.0, end=dur / 2, label="a", fluid={}),
+        Segment(start=dur / 2, end=dur, label="b",
+                fluid={"vorticity": {"max": 80}}),
+    ])
+    cfgs = proj.frame_configs(score.n_frames)
+    boundary = int(round(dur / 2 * 24))
+    vals = [c.vorticity.max for c in cfgs]
+    assert vals[0] == 20 and vals[-1] == 80
+    # at least one frame holds an intermediate (smoothed) value near the cut
+    near = vals[max(0, boundary - 8): boundary + 8]
+    assert any(20 < v < 80 for v in near), near
+
+
 def test_prompt_schedule_per_segment(track_wav):
     score = analyze(track_wav, fps=24)
     rec = R.load_recipe("eclosion")

@@ -72,7 +72,8 @@ def assemble(frames_dir: str | Path, audio_path: str | Path, out_path: str | Pat
              pattern: str = "%06d.png",
              score: Optional[Score] = None,
              fluid_stats_path: Optional[str | Path] = None,
-             audio_offset_s: float = 0.0) -> PostResult:
+             audio_offset_s: float = 0.0,
+             grain: float = 0.0, vignette: float = 0.0) -> PostResult:
     frames_dir = Path(frames_dir)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,6 +88,10 @@ def assemble(frames_dir: str | Path, audio_path: str | Path, out_path: str | Pat
         out_fps = fps
     aspect_filter = ASPECT_FILTERS.get(aspect)
     vf.append(aspect_filter if aspect_filter else _EVEN)
+    if vignette > 0:
+        vf.append(f"vignette=angle={0.25 + 0.55 * min(vignette, 1.0):.3f}")
+    if grain > 0:
+        vf.append(f"noise=alls={max(1, int(round(min(grain, 1.0) * 24)))}:allf=t")
 
     has_audio = Path(audio_path).exists()
     args = ["-framerate", str(fps), "-i", str(frames_dir / pattern)]

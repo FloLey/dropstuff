@@ -29,7 +29,12 @@ def synth_track(path: Path, sr: int = 22050, duration: float = 4.0,
         t = np.arange(end - start) / sr
         env = np.exp(-t * 40.0)
         if noise:
+            from scipy.signal import butter, sosfilt
             band = rng.standard_normal(end - start).astype(np.float32)
+            # high-pass the burst like a real hi-hat, so it is genuinely a
+            # high-band event and not broadband noise leaking into the low band
+            sos = butter(4, 5000.0, btype="high", fs=sr, output="sos")
+            band = sosfilt(sos, band).astype(np.float32)
             sig = band * env * amp
         else:
             sig = np.sin(2 * np.pi * freq * t).astype(np.float32) * env * amp

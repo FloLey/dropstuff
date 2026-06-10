@@ -97,6 +97,8 @@ class PostConfig:
     upscale: bool = False
     interpolate: bool = False
     aspect: str = "square"          # "square" | "wide"
+    grain: float = 0.0              # 0..1 film grain on the final (fuses artefacts)
+    vignette: float = 0.0           # 0..1 vignette strength on the final
 
 
 @dataclass

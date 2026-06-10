@@ -18,6 +18,29 @@ from .recipe import (Recipe, FluidConfig, _build, _deep_merge,
                      from_dict as recipe_from_dict)
 from .score import Score
 
+# Parameters glide across segment boundaries over this window instead of
+# jumping — a hard cut in vorticity/exposure reads as a glitch in the fluid.
+SMOOTH_S = 0.6
+
+
+def _lerp_cfg(a: dict, b: dict, w: float) -> dict:
+    """Numeric-field interpolation between two config dicts (w: 0=a, 1=b).
+
+    Ints stay ints (counts), non-numeric fields switch at the midpoint."""
+    out = {}
+    for k, va in a.items():
+        vb = b.get(k, va)
+        both_num = (isinstance(va, (int, float)) and isinstance(vb, (int, float))
+                    and not isinstance(va, bool) and not isinstance(vb, bool))
+        if both_num:
+            mixed = va + (vb - va) * w
+            out[k] = int(round(mixed)) if isinstance(va, int) and isinstance(vb, int) else mixed
+        elif isinstance(va, dict) and isinstance(vb, dict):
+            out[k] = _lerp_cfg(va, vb, w)
+        else:
+            out[k] = va if w < 0.5 else vb
+    return out
+
 
 @dataclass
 class Segment:
@@ -54,19 +77,35 @@ class Project:
         return len(self.segments) - 1 if self.segments else 0
 
     def frame_configs(self, n_frames: int) -> List[FluidConfig]:
-        """One effective :class:`FluidConfig` per frame (base + segment override)."""
-        base_d = asdict(self.recipe.fluid)
-        cache: dict = {}
-
-        def cfg_for(idx: int) -> FluidConfig:
-            if idx not in cache:
-                ov = self.segments[idx].fluid if self.segments else {}
-                cache[idx] = _build(FluidConfig, _deep_merge(base_d, ov))
-            return cache[idx]
-
+        """One effective :class:`FluidConfig` per frame (base + segment override),
+        with numeric parameters smoothed across boundaries over ``SMOOTH_S``."""
         if not self.segments:
             return [self.recipe.fluid] * n_frames
-        return [cfg_for(self._seg_index_for_frame(i)) for i in range(n_frames)]
+        base_d = asdict(self.recipe.fluid)
+        seg_dicts = [_deep_merge(base_d, s.fluid or {}) for s in self.segments]
+        seg_cfgs = [_build(FluidConfig, d) for d in seg_dicts]
+
+        half = SMOOTH_S / 2.0
+        out: List[FluidConfig] = []
+        for i in range(n_frames):
+            t = i / self.fps
+            idx = self._seg_index_for_frame(i)
+            cfg = seg_cfgs[idx]
+            # blend into the neighbour when inside the smoothing window
+            if idx + 1 < len(self.segments):
+                tb = self.segments[idx].end
+                if t > tb - half:
+                    w = (t - (tb - half)) / SMOOTH_S          # 0 .. 0.5 at boundary
+                    cfg = _build(FluidConfig,
+                                 _lerp_cfg(seg_dicts[idx], seg_dicts[idx + 1], w))
+            if idx > 0:
+                tb = self.segments[idx].start
+                if t < tb + half:
+                    w = (t - (tb - half)) / SMOOTH_S          # 0.5 .. 1 after boundary
+                    cfg = _build(FluidConfig,
+                                 _lerp_cfg(seg_dicts[idx - 1], seg_dicts[idx], w))
+            out.append(cfg)
+        return out
 
     def prompt_schedule(self, n_frames: int) -> List[str]:
         if not self.segments:

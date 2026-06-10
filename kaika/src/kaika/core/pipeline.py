@@ -284,7 +284,8 @@ def run_diffuse(run_dir: str | Path,
         post = assemble(frames, frozen, final, fps=project.fps,
                         aspect=recipe.post.aspect, interpolate=recipe.post.interpolate,
                         upscale=recipe.post.upscale, score=score,
-                        fluid_stats_path=stats if stats.exists() else None)
+                        fluid_stats_path=stats if stats.exists() else None,
+                        grain=recipe.post.grain, vignette=recipe.post.vignette)
         manifest["stages"]["post"] = {"done": True}
         manifest["final"] = final.name
         manifest["sync"] = asdict(post.sync) if post.sync else manifest.get("sync")

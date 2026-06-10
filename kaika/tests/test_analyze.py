@@ -28,6 +28,18 @@ def test_low_onsets_present(track_wav):
     assert all(0.0 <= e.mag <= 1.0 for e in score.onsets["low"])
 
 
+def test_onsets_are_precise_not_noisy(track_wav):
+    """HPSS + strict peak picking: counts must stay near the real event counts
+    (8 kicks, 8 hats), not balloon — every onset spawns a visual source."""
+    score = analyze(track_wav, fps=24)
+    assert len(score.onsets["low"]) <= 14      # was 23 before HPSS
+    assert 5 <= len(score.onsets["high"]) <= 12
+    # mid-track kicks land on the beat grid (±1 frame)
+    times = [e.t for e in score.onsets["low"]]
+    for expected in (0.5, 1.0, 1.5, 2.0, 2.5):
+        assert any(abs(t - expected) < 0.06 for t in times), expected
+
+
 def test_bands_normalised(track_wav):
     score = analyze(track_wav, fps=24)
     for f in score.frames:
