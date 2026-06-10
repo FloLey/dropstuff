@@ -7,6 +7,7 @@ stage. Progress lives in a thread-safe dict the WebSocket endpoint polls.
 """
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import uuid
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from .db import JobDB
+
+logger = logging.getLogger("kaika.jobs")
 
 
 class JobManager:
@@ -82,5 +85,6 @@ class JobManager:
             self._set(job_id, status="done", run_id=run_id, done=1, total=1)
             self.db.update(job_id, status="done", run_id=run_id or "")
         except Exception as e:  # noqa
+            logger.exception("job %s failed", job_id)
             self._set(job_id, status="error", error=f"{type(e).__name__}: {e}")
             self.db.update(job_id, status="error", error=f"{type(e).__name__}: {e}")

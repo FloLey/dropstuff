@@ -9,9 +9,9 @@ fall back to ``prompts.default`` and ``base`` is always prefixed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, fields, is_dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, get_type_hints, get_origin, get_args
 
 import os
 
@@ -126,41 +126,50 @@ class Recipe:
                                               allow_unicode=True))
 
 
-def _merge(default, data):
-    """Build a dataclass instance from defaults overlaid with a dict.
-
-    Scalar/list fields are copied as-is; nested dataclass fields need a line
-    below (this is the one place to extend when adding a new nested config).
-    """
-    if data is None:
-        return default
-    kwargs = {}
-    for f in default.__dataclass_fields__.values():
-        cur = getattr(default, f.name)
-        if f.name in data and data[f.name] is not None:
-            val = data[f.name]
-            if f.name == "splats" and isinstance(val, dict):
-                kwargs[f.name] = {k: Splat(**v) for k, v in val.items()}
-            elif f.name == "vorticity" and isinstance(val, dict):
-                kwargs[f.name] = Vorticity(**val)
-            else:
-                kwargs[f.name] = val
+def _deep_merge(base: dict, over: dict) -> dict:
+    """Recursively overlay ``over`` onto ``base`` (override wins; None skipped)."""
+    out = dict(base)
+    for k, v in (over or {}).items():
+        if v is None:
+            continue
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
         else:
-            kwargs[f.name] = cur
-    return type(default)(**kwargs)
+            out[k] = v
+    return out
+
+
+def _coerce(ftype, val):
+    """Rebuild nested dataclasses / dicts-of-dataclasses from plain data."""
+    if is_dataclass(ftype) and isinstance(val, dict):
+        return _build(ftype, val)
+    if get_origin(ftype) is dict and isinstance(val, dict):
+        args = get_args(ftype)
+        if len(args) == 2 and is_dataclass(args[1]):
+            return {k: (_build(args[1], v) if isinstance(v, dict) else v)
+                    for k, v in val.items()}
+    return val
+
+
+def _build(cls, data: dict):
+    """Generic dataclass builder: recurse into any nested dataclass field.
+
+    Adding a new nested config requires no change here — type hints drive it.
+    Expects ``data`` to be a full dict (use ``_deep_merge`` onto defaults first).
+    """
+    hints = get_type_hints(cls)
+    kwargs = {f.name: _coerce(hints.get(f.name, object), data[f.name])
+              for f in fields(cls) if f.name in data and data[f.name] is not None}
+    return cls(**kwargs)
+
+
+def _merge(default, data):
+    """Overlay ``data`` onto a default dataclass instance (deep), rebuilding it."""
+    return _build(type(default), _deep_merge(asdict(default), data or {}))
 
 
 def from_dict(d: dict) -> Recipe:
-    d = dict(d or {})
-    r = Recipe()
-    return Recipe(
-        name=d.get("name", r.name),
-        seed=int(d.get("seed", r.seed)),
-        fluid=_merge(FluidConfig(), d.get("fluid")),
-        diffusion=_merge(DiffusionConfig(), d.get("diffusion")),
-        post=_merge(PostConfig(), d.get("post")),
-        prompts={**r.prompts, **(d.get("prompts") or {})},
-    )
+    return _build(Recipe, _deep_merge(asdict(Recipe()), d or {}))
 
 
 def load_recipe(name_or_path: str | Path) -> Recipe:

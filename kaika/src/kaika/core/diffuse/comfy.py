@@ -23,16 +23,24 @@ from .base import (Diffuser, DiffuseRequest, DiffuseResult, ProgressFn,
 WORKFLOW_DIR = Path(__file__).resolve().parent / "workflows"
 DEFAULT_NEGATIVE = "blurry, low quality, text, watermark, distorted"
 
+# model id -> workflow template file (without extension). Add a model here +
+# drop its JSON in workflows/ to support a new vid2vid backend.
+WORKFLOWS = {
+    "wan-2.2-vace": "wan_vace_vid2vid",
+}
+
 
 class ComfyUnavailable(RuntimeError):
     pass
 
 
 def load_workflow_template(model: str) -> dict:
-    """Load the versioned workflow JSON for a model family."""
-    name = "wan_vace_vid2vid"      # single template for the Wan/VACE family
-    path = WORKFLOW_DIR / f"{name}.json"
-    data = json.loads(path.read_text())
+    """Load the versioned workflow JSON registered for a model family."""
+    name = WORKFLOWS.get(model)
+    if name is None:
+        raise ValueError(f"no workflow registered for model {model!r}; "
+                         f"known: {sorted(WORKFLOWS)}")
+    data = json.loads((WORKFLOW_DIR / f"{name}.json").read_text())
     data.pop("_about", None)
     return data
 

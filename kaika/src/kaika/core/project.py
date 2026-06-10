@@ -14,21 +14,9 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Optional
 
-from .recipe import Recipe, FluidConfig, _merge, from_dict as recipe_from_dict
+from .recipe import (Recipe, FluidConfig, _build, _deep_merge,
+                     from_dict as recipe_from_dict)
 from .score import Score
-
-
-def _deep_merge(base: dict, over: dict) -> dict:
-    """Recursively overlay ``over`` onto ``base`` (override wins, None ignored)."""
-    out = dict(base)
-    for k, v in (over or {}).items():
-        if v is None:
-            continue
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _deep_merge(out[k], v)
-        else:
-            out[k] = v
-    return out
 
 
 @dataclass
@@ -73,7 +61,7 @@ class Project:
         def cfg_for(idx: int) -> FluidConfig:
             if idx not in cache:
                 ov = self.segments[idx].fluid if self.segments else {}
-                cache[idx] = _merge(FluidConfig(), _deep_merge(base_d, ov))
+                cache[idx] = _build(FluidConfig, _deep_merge(base_d, ov))
             return cache[idx]
 
         if not self.segments:
