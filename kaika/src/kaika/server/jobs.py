@@ -1,20 +1,18 @@
-"""Background job queue: one render at a time, with live progress state.
+"""Background job queue: one task at a time, with live progress state.
 
 A single worker thread drains a FIFO queue (the local sim already saturates the
-machine). Progress is kept in a thread-safe in-memory dict that the WebSocket
-endpoint polls and streams — no cross-thread asyncio juggling.
+machine). A job wraps any callable ``fn(progress) -> result`` — a full render, a
+fluid-only preview, or a diffuse-resume — so the same machinery serves every
+stage. Progress lives in a thread-safe dict the WebSocket endpoint polls.
 """
 from __future__ import annotations
 
 import queue
 import threading
-import time
 import uuid
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
-from ..core import recipe as R
-from ..core.pipeline import run_pipeline
 from .db import JobDB
 
 
@@ -26,12 +24,11 @@ class JobManager:
         self._jobs: Dict[str, dict] = {}
         self._lock = threading.Lock()
         self._worker: Optional[threading.Thread] = None
-        # rehydrate history from db (mark interrupted jobs as such)
         for row in db.all():
             self._jobs[row["id"]] = {
                 "id": row["id"], "status": row["status"], "stage": None,
                 "done": 0, "total": 0, "run_id": row["run_id"],
-                "error": row["error"], "recipe": row["recipe"],
+                "error": row["error"], "kind": row["recipe"],
             }
 
     def _ensure_worker(self):
@@ -39,17 +36,16 @@ class JobManager:
             self._worker = threading.Thread(target=self._loop, daemon=True)
             self._worker.start()
 
-    def submit(self, audio_path: str | Path, recipe, seconds=None,
-               recipe_name: str = "") -> str:
+    def submit(self, fn: Callable[[Callable], object], run_id: Optional[str] = None,
+               kind: str = "render") -> str:
+        """Queue ``fn(progress)``; ``run_id`` is the target run if known upfront."""
         job_id = uuid.uuid4().hex[:12]
         with self._lock:
             self._jobs[job_id] = {
                 "id": job_id, "status": "queued", "stage": None, "done": 0,
-                "total": 0, "run_id": None, "error": None,
-                "recipe": recipe_name or getattr(recipe, "name", "recipe"),
-                "_audio": str(audio_path), "_recipe": recipe, "_seconds": seconds,
+                "total": 0, "run_id": run_id, "error": None, "kind": kind, "_fn": fn,
             }
-        self.db.create(job_id, self._jobs[job_id]["recipe"], Path(audio_path).name)
+        self.db.create(job_id, kind, run_id or "")
         self._q.put(job_id)
         self._ensure_worker()
         return job_id
@@ -68,13 +64,12 @@ class JobManager:
             try:
                 job_id = self._q.get(timeout=1.0)
             except queue.Empty:
-                return  # idle -> let the thread die; resurrected on next submit
+                return
             self._run_one(job_id)
 
     def _run_one(self, job_id: str):
         with self._lock:
-            job = self._jobs[job_id]
-            audio, recipe, seconds = job["_audio"], job["_recipe"], job["_seconds"]
+            fn = self._jobs[job_id]["_fn"]
         self._set(job_id, status="running")
         self.db.update(job_id, status="running")
 
@@ -82,11 +77,10 @@ class JobManager:
             self._set(job_id, stage=stage, done=done, total=total)
 
         try:
-            res = run_pipeline(audio, recipe, runs_root=self.runs_root,
-                               seconds=seconds, progress=progress)
-            self._set(job_id, status="done", run_id=res.run_id, stage="post",
-                      done=1, total=1)
-            self.db.update(job_id, status="done", run_id=res.run_id)
+            res = fn(progress)
+            run_id = getattr(res, "run_id", None) or self._jobs[job_id].get("run_id")
+            self._set(job_id, status="done", run_id=run_id, done=1, total=1)
+            self.db.update(job_id, status="done", run_id=run_id or "")
         except Exception as e:  # noqa
             self._set(job_id, status="error", error=f"{type(e).__name__}: {e}")
             self.db.update(job_id, status="error", error=f"{type(e).__name__}: {e}")

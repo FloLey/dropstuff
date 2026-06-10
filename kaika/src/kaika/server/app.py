@@ -21,7 +21,10 @@ from pydantic import BaseModel
 
 from ..core import recipe as R
 from ..core.analyze import analyze
-from ..core.pipeline import load_run, list_runs
+from ..core.project import Project
+from ..core.score import Score
+from ..core.pipeline import (load_run, list_runs, run_pipeline, run_fluid,
+                             run_diffuse, init_project_run, _frozen_audio)
 from .db import JobDB
 from .jobs import JobManager
 
@@ -31,6 +34,19 @@ WEBAPP_DIST = Path(__file__).resolve().parents[1] / "webapp_dist"
 class RunRequest(BaseModel):
     audio_id: str
     recipe_name: Optional[str] = None
+    recipe: Optional[dict] = None
+    seconds: Optional[float] = None
+
+
+class ProjectRequest(BaseModel):
+    audio_id: str
+    recipe_name: Optional[str] = None
+    recipe: Optional[dict] = None
+    seconds: Optional[float] = None
+
+
+class ProjectUpdate(BaseModel):
+    segments: Optional[list] = None
     recipe: Optional[dict] = None
     seconds: Optional[float] = None
 
@@ -107,17 +123,89 @@ def create_app(runs_root: str | Path = "runs",
         }
 
     # ---- runs (jobs) ------------------------------------------------------
+    def _recipe_from(req) -> R.Recipe:
+        if req.recipe is not None:
+            return R.from_dict(req.recipe)
+        return R.load_recipe(req.recipe_name or "eclosion")
+
     @app.post("/api/runs")
     def start_run(req: RunRequest):
         path = _resolve_audio(req.audio_id)
-        if req.recipe is not None:
-            rec = R.from_dict(req.recipe)
-            name = rec.name
-        else:
-            rec = R.load_recipe(req.recipe_name or "eclosion")
-            name = rec.name
-        job_id = jm.submit(path, rec, seconds=req.seconds, recipe_name=name)
+        rec = _recipe_from(req)
+        job_id = jm.submit(
+            lambda progress: run_pipeline(path, rec, runs_root=runs_root,
+                                          seconds=req.seconds, progress=progress),
+            kind="render")
         return {"job_id": job_id}
+
+    # ---- projects (segment editor) ----------------------------------------
+    def _project_payload(run_id: str) -> dict:
+        rd = runs_root / run_id
+        if not (rd / "project.json").exists():
+            raise HTTPException(404, "project not found")
+        return {"run_id": run_id, "project": Project.from_json(rd / "project.json").to_dict(),
+                "manifest": load_run(rd)}
+
+    @app.post("/api/projects")
+    def create_project(req: ProjectRequest):
+        path = _resolve_audio(req.audio_id)
+        rec = _recipe_from(req)
+        run_dir, project, score = init_project_run(path, rec, runs_root=runs_root,
+                                                   seconds=req.seconds)
+        import librosa
+        y, sr = librosa.load(str(path), sr=None, mono=True)
+        payload = _project_payload(run_dir.name)
+        payload["analysis"] = {
+            "tempo_bpm": score.tempo_bpm, "duration_s": score.audio.duration_s,
+            "fps": score.audio.fps, "n_frames": score.n_frames,
+            "beats": [b.__dict__ for b in score.beats],
+            "onset_counts": {k: len(v) for k, v in score.onsets.items()},
+            "waveform": _waveform_peaks(y),
+        }
+        return payload
+
+    @app.get("/api/projects/{run_id}")
+    def get_project(run_id: str):
+        return _project_payload(run_id)
+
+    @app.put("/api/projects/{run_id}")
+    def update_project(run_id: str, upd: ProjectUpdate):
+        rd = runs_root / run_id
+        if not (rd / "project.json").exists():
+            raise HTTPException(404, "project not found")
+        proj = Project.from_json(rd / "project.json")
+        if upd.recipe is not None:
+            proj.recipe = R.from_dict(upd.recipe)
+        if upd.seconds is not None:
+            proj.seconds = upd.seconds
+        if upd.segments is not None:
+            from ..core.project import Segment
+            proj.segments = [Segment(**s) for s in upd.segments]
+        proj.to_json(rd / "project.json")
+        return _project_payload(run_id)
+
+    @app.post("/api/projects/{run_id}/preview")
+    def preview_project(run_id: str):
+        rd = runs_root / run_id
+        if not (rd / "project.json").exists():
+            raise HTTPException(404, "project not found")
+
+        def task(progress):
+            proj = Project.from_json(rd / "project.json")
+            score = Score.from_json(rd / "score.json")
+            audio = _frozen_audio(rd) or _resolve_audio(proj.audio.split(".")[0])
+            return run_fluid(proj, audio, runs_root=runs_root, run_id=run_id,
+                             score=score, progress=progress)
+
+        return {"job_id": jm.submit(task, run_id=run_id, kind="fluid")}
+
+    @app.post("/api/projects/{run_id}/generate")
+    def generate_project(run_id: str):
+        rd = runs_root / run_id
+        if not (rd / "fluid").exists():
+            raise HTTPException(400, "run the fluid preview first")
+        return {"job_id": jm.submit(lambda progress: run_diffuse(rd, progress=progress),
+                                    run_id=run_id, kind="diffuse")}
 
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str):

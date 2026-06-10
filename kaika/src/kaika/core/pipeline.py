@@ -78,6 +78,29 @@ def _save_manifest(run_dir: Path, manifest: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+def init_project_run(audio_path: str | Path, recipe: Recipe, runs_root: str | Path = "runs",
+                     run_id: Optional[str] = None, seconds: Optional[float] = None):
+    """Create a working run dir: freeze audio + recipe, analyze, seed a Project
+    from the detected sections. Does NOT simulate. Returns (run_dir, project, score)."""
+    audio_path = Path(audio_path)
+    run_id = run_id or _new_run_id()
+    run_dir = Path(runs_root) / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    recipe.to_yaml(run_dir / "recipe.yaml")
+    frozen = _freeze_audio(audio_path, run_dir)
+    score = analyze(frozen, fps=recipe.post.fps)
+    score.to_json(run_dir / "score.json")
+    project = Project.from_score(score, recipe, audio=frozen.name)
+    project.seconds = seconds
+    project.to_json(run_dir / "project.json")
+    _save_manifest(run_dir, {
+        "id": run_id, "created": time.time(), "audio": audio_path.name,
+        "recipe": recipe.name, "fps": project.fps, "seconds": seconds,
+        "stages": {}, "stage": "created", "status": "created", "error": None,
+    })
+    return run_dir, project, score
+
+
 def run_fluid(project: Project, audio_path: str | Path, runs_root: str | Path = "runs",
               run_id: Optional[str] = None, score: Optional[Score] = None,
               progress: Optional[ProgressFn] = None) -> RunResult:
