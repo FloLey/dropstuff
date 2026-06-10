@@ -1,33 +1,38 @@
 // Typed client for the Kaika API. Same origin in production; Vite proxies in dev.
 
-export interface Section { start: number; end: number; label: string; energy: number; }
+export interface Section { start: number; end: number; label: string; energy?: number; }
 export interface Beat { t: number; mag: number; }
+export interface Segment {
+  start: number; end: number; label: string;
+  prompt: string;
+  fluid: any; // partial fluid overrides
+}
 export interface Analysis {
-  audio_id: string;
-  tempo_bpm: number;
-  duration_s: number;
-  fps: number;
-  n_frames: number;
-  sections: Section[];
-  beats: Beat[];
-  onset_counts: Record<string, number>;
-  waveform: number[];
+  tempo_bpm: number; duration_s: number; fps: number; n_frames: number;
+  beats: Beat[]; onset_counts: Record<string, number>; waveform: number[];
+}
+export interface ProjectDoc {
+  audio: string; fps: number; seconds: number | null; recipe: any; segments: Segment[];
+}
+export interface ProjectPayload {
+  run_id: string; project: ProjectDoc; manifest: RunManifest; analysis?: Analysis;
 }
 export interface RecipeEntry { name: string; yaml: string; recipe: any; }
 export interface JobState {
   id: string; status: string; stage: string | null;
-  done: number; total: number; run_id: string | null; error: string | null;
+  done: number; total: number; run_id: string | null; error: string | null; kind?: string;
 }
 export interface RunManifest {
   id: string; created: number; recipe: string; fps: number; n_frames: number;
-  status: string; sync: { lag_frames: number; correlation: number } | null;
-  final?: string; stages: Record<string, any>;
+  stage?: string; status: string; sync: { lag_frames: number; correlation: number } | null;
+  final?: string; fluid_preview?: string; stages: Record<string, any>;
 }
 
 async function j<T>(r: Response): Promise<T> {
   if (!r.ok) throw new Error((await r.text()) || r.statusText);
   return r.json() as Promise<T>;
 }
+const JSON_H = { "Content-Type": "application/json" };
 
 export const api = {
   recipes: () => fetch("/api/recipes").then(j<RecipeEntry[]>),
@@ -39,21 +44,24 @@ export const api = {
       .then(j<{ audio_id: string; name: string }>);
   },
 
-  analyze: (audio_id: string, fps = 24) =>
-    fetch(`/api/analyze?audio_id=${audio_id}&fps=${fps}`, { method: "POST" })
-      .then(j<Analysis>),
-
-  startRun: (body: { audio_id: string; recipe?: any; recipe_name?: string; seconds?: number }) =>
-    fetch("/api/runs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then(j<{ job_id: string }>),
+  // ---- projects (segment editor) ----
+  createProject: (body: { audio_id: string; recipe?: any; recipe_name?: string; seconds?: number }) =>
+    fetch("/api/projects", { method: "POST", headers: JSON_H, body: JSON.stringify(body) })
+      .then(j<ProjectPayload>),
+  getProject: (runId: string) => fetch(`/api/projects/${runId}`).then(j<ProjectPayload>),
+  updateProject: (runId: string, body: { segments?: Segment[]; recipe?: any; seconds?: number }) =>
+    fetch(`/api/projects/${runId}`, { method: "PUT", headers: JSON_H, body: JSON.stringify(body) })
+      .then(j<ProjectPayload>),
+  previewProject: (runId: string) =>
+    fetch(`/api/projects/${runId}/preview`, { method: "POST" }).then(j<{ job_id: string }>),
+  generateProject: (runId: string) =>
+    fetch(`/api/projects/${runId}/generate`, { method: "POST" }).then(j<{ job_id: string }>),
 
   job: (id: string) => fetch(`/api/jobs/${id}`).then(j<JobState>),
   runs: () => fetch("/api/runs").then(j<RunManifest[]>),
   run: (id: string) => fetch(`/api/runs/${id}`).then(j<RunManifest>),
   finalUrl: (id: string) => `/api/runs/${id}/final`,
+  previewUrl: (id: string) => `/api/runs/${id}/files/fluid_preview.mp4`,
   fileUrl: (id: string, sub: string) => `/api/runs/${id}/files/${sub}`,
 
   watchJob: (id: string, onMsg: (s: JobState) => void): WebSocket => {

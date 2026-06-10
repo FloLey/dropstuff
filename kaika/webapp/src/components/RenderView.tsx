@@ -1,56 +1,62 @@
-import { useEffect, useState } from "react";
-import { api, JobState, RunManifest, STAGES } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { api, JobState, STAGES } from "../api";
 
 interface Props {
+  runId: string | null;
   jobId: string | null;
   onSeeGallery: () => void;
 }
 
-export default function RenderView({ jobId, onSeeGallery }: Props) {
+export default function RenderView({ runId, jobId, onSeeGallery }: Props) {
   const [job, setJob] = useState<JobState | null>(null);
-  const [run, setRun] = useState<RunManifest | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const watch = (id: string) => {
+    wsRef.current?.close();
+    setJob(null);
+    wsRef.current = api.watchJob(id, setJob);
+  };
 
   useEffect(() => {
-    if (!jobId) return;
-    setRun(null);
-    const ws = api.watchJob(jobId, setJob);
-    return () => ws.close();
+    if (jobId) watch(jobId);
+    return () => wsRef.current?.close();
   }, [jobId]);
 
-  useEffect(() => {
-    if (job?.status === "done" && job.run_id) {
-      api.run(job.run_id).then(setRun);
-    }
-  }, [job?.status, job?.run_id]);
+  const generate = async () => {
+    if (!runId) return;
+    const { job_id } = await api.generateProject(runId);
+    watch(job_id);
+  };
 
-  if (!jobId) {
+  if (!jobId || !runId) {
     return (
       <div className="card" style={{ marginTop: 26 }}>
-        <p className="muted">No active render. Start one from the Studio.</p>
+        <p className="muted">No active render. Start a fluid preview from the Studio.</p>
       </div>
     );
   }
 
+  const kind = job?.kind || "fluid";
   const stageIndex = job?.stage ? STAGES.indexOf(job.stage) : -1;
+  const done = job?.status === "done";
+  const isFluid = kind === "fluid";
+  // fluid stage stops at "post" without diffuse; show only the relevant stages
+  const stages = isFluid ? STAGES.filter((s) => s !== "diffuse") : STAGES;
 
   return (
     <div className="grid">
       <div className="card">
-        <h3>Pipeline</h3>
+        <h3>{isFluid ? "Fluid preview" : "Diffusion"}</h3>
         <div className="pipeline">
-          {STAGES.map((name, i) => {
+          {stages.map((name) => {
             const isCurrent = job?.stage === name && job.status === "running";
-            const isDone =
-              job?.status === "done" || (stageIndex > i) ||
-              (stageIndex === i && job?.done === job?.total && job?.total! > 0);
-            const pct =
-              isDone ? 100 : isCurrent && job?.total ? Math.round((job.done / job.total) * 100) : 0;
+            const isDone = done || stageIndex > STAGES.indexOf(name) ||
+              (job?.stage === name && job?.total! > 0 && job?.done === job?.total);
+            const pct = isDone ? 100 : isCurrent && job?.total ? Math.round((job.done / job.total) * 100) : 0;
             return (
               <div key={name} className={`stage-row ${isDone ? "done" : ""}`}>
                 <span className="stage-name">{name}</span>
-                <div className="bar">
-                  <i style={{ width: `${pct}%` }} />
-                </div>
+                <div className="bar"><i style={{ width: `${pct}%` }} /></div>
                 <span className="pct">{isDone ? "done" : isCurrent ? `${pct}%` : "—"}</span>
               </div>
             );
@@ -60,28 +66,28 @@ export default function RenderView({ jobId, onSeeGallery }: Props) {
       </div>
 
       <aside className="card">
-        <h3>Result</h3>
-        {run ? (
+        <h3>{done ? (isFluid ? "Fluid result" : "Final clip") : "Rendering…"}</h3>
+        {done ? (
           <>
-            <video src={api.finalUrl(run.id)} controls autoPlay loop />
-            <div className="run-meta">
-              <span className="mono">{run.recipe}</span>
-              <span className="mono">{run.n_frames} frames</span>
-            </div>
-            {run.sync && (
-              <p className="muted mono" style={{ marginTop: 6 }}>
-                sync lag {run.sync.lag_frames}f · corr {run.sync.correlation}
-              </p>
+            <video
+              src={isFluid ? api.previewUrl(runId) : api.finalUrl(runId)}
+              controls autoPlay loop
+            />
+            {isFluid ? (
+              <>
+                <p className="muted" style={{ margin: "8px 0" }}>
+                  Happy with the motion? Run the diffusion to get the final clip.
+                </p>
+                <button className="btn" onClick={generate}>Generate final (diffusion)</button>
+              </>
+            ) : (
+              <button className="btn ghost" onClick={onSeeGallery}>See in Gallery</button>
             )}
-            <button className="btn ghost" onClick={onSeeGallery}>
-              See in Gallery
-            </button>
           </>
         ) : (
           <p className="muted">
-            {job?.status === "error"
-              ? "Render failed."
-              : "Rendering… previews appear here when ready."}
+            {job?.status === "error" ? "Render failed — see the pipeline." :
+              "Working… the result appears here when ready."}
           </p>
         )}
       </aside>

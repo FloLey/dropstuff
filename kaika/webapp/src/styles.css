@@ -100,6 +100,8 @@ textarea { resize: vertical; min-height: 48px; }
 .badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; }
 .badge.done { background: #d7eae6; color: var(--courant); }
 .badge.error { background: #f5d6e0; color: var(--petale); }
-.badge.running { background: #fef0c7; color: #92660a; }
+.badge.running, .badge.fluid { background: #fef0c7; color: #92660a; }
+.badge.created { background: var(--voile); color: var(--brume); }
+.sec-chip.sel { outline: 2px solid var(--petale); outline-offset: 1px; }
 .muted { color: var(--brume); font-size: 13px; }
 .err { color: var(--petale); font-size: 13px; margin-top: 8px; }

@@ -7,6 +7,7 @@ type View = "studio" | "render" | "gallery";
 
 export default function App() {
   const [view, setView] = useState<View>("studio");
+  const [runId, setRunId] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
 
   const tab = (v: View, label: string) => (
@@ -18,9 +19,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="top">
-        <span className="brand">
-          Kaika <span className="kanji">開花</span>
-        </span>
+        <span className="brand">Kaika <span className="kanji">開花</span></span>
         <nav className="tabs">
           {tab("studio", "Studio")}
           {tab("render", "Render")}
@@ -30,14 +29,11 @@ export default function App() {
 
       {view === "studio" && (
         <Studio
-          onStarted={(id) => {
-            setJobId(id);
-            setView("render");
-          }}
+          onPreview={(rid, jid) => { setRunId(rid); setJobId(jid); setView("render"); }}
         />
       )}
       {view === "render" && (
-        <RenderView jobId={jobId} onSeeGallery={() => setView("gallery")} />
+        <RenderView runId={runId} jobId={jobId} onSeeGallery={() => setView("gallery")} />
       )}
       {view === "gallery" && <Gallery />}
     </div>
