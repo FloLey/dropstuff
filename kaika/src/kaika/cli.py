@@ -28,6 +28,9 @@ def _cmd_run(args) -> int:
 
 
 def _cmd_serve(args) -> int:
+    url = f"http://{args.host}:{args.port}"
+    print(f"Starting Kaika… loading the analysis engine (first launch ~10s)\n"
+          f"  → {url}", flush=True)
     from .server.app import serve
     serve(host=args.host, port=args.port, runs_root=args.out,
           open_browser=not args.no_browser)
