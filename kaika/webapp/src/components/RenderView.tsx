@@ -39,14 +39,16 @@ export default function RenderView({ runId, jobId, onSeeGallery }: Props) {
   const kind = job?.kind || "fluid";
   const stageIndex = job?.stage ? STAGES.indexOf(job.stage) : -1;
   const done = job?.status === "done";
-  const isFluid = kind === "fluid";
-  // fluid stage stops at "post" without diffuse; show only the relevant stages
-  const stages = isFluid ? STAGES.filter((s) => s !== "diffuse") : STAGES;
+  const isSegment = kind === "fluid_segment";
+  const isFluid = kind === "fluid" || isSegment;
+  // show only the stages this kind of job actually runs
+  const stages = isSegment ? ["simulate", "post"]
+    : isFluid ? STAGES.filter((s) => s !== "diffuse" && s !== "control") : STAGES;
 
   return (
     <div className="grid">
       <div className="card">
-        <h3>{isFluid ? "Fluid preview" : "Diffusion"}</h3>
+        <h3>{isSegment ? "Segment preview" : isFluid ? "Fluid preview" : "Diffusion"}</h3>
         <div className="pipeline">
           {stages.map((name) => {
             const isCurrent = job?.stage === name && job.status === "running";
@@ -70,7 +72,8 @@ export default function RenderView({ runId, jobId, onSeeGallery }: Props) {
         {done ? (
           <>
             <video
-              src={isFluid ? api.previewUrl(runId) : api.finalUrl(runId)}
+              src={isSegment ? api.segPreviewUrl(runId)
+                : isFluid ? api.previewUrl(runId) : api.finalUrl(runId)}
               controls autoPlay loop
             />
             {isFluid ? (

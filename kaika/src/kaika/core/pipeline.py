@@ -243,8 +243,10 @@ def run_diffuse(run_dir: str | Path,
     recipe = project.recipe
     manifest = _load_manifest(run_dir)
 
-    # A draft preview is not good enough to feed E4 — redo the fluid full-res.
-    if manifest.get("stages", {}).get("simulate", {}).get("draft"):
+    # E4 needs the full-quality, full-length fluid. Build it here if the run only
+    # holds a draft (low-res) preview or segment previews so far.
+    sim_meta = manifest.get("stages", {}).get("simulate", {})
+    if sim_meta.get("draft") or not (run_dir / "fluid").exists():
         audio = frozen_audio(run_dir)
         run_fluid(project, audio, runs_root=run_dir.parent, run_id=run_dir.name,
                   score=score, draft=False, progress=progress)

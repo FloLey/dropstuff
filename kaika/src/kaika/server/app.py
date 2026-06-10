@@ -7,6 +7,7 @@ there.
 from __future__ import annotations
 
 import asyncio
+import json
 import shutil
 import uuid
 from pathlib import Path
@@ -149,12 +150,47 @@ def create_app(runs_root: str | Path = "runs",
         return {"job_id": job_id}
 
     # ---- projects (segment editor) ----------------------------------------
-    def _project_payload(run_id: str) -> dict:
+    def _analysis_payload(rd: Path) -> Optional[dict]:
+        """Persistent analysis view for the editor: score data + cached waveform."""
+        score_path = rd / "score.json"
+        if not score_path.exists():
+            return None
+        score = Score.from_json(score_path)
+        wf_path = rd / "waveform.json"
+        if wf_path.exists():
+            waveform = json.loads(wf_path.read_text())
+        else:
+            import librosa
+            audio = frozen_audio(rd)
+            if audio is None:
+                waveform = []
+            else:
+                y, _sr = librosa.load(str(audio), sr=None, mono=True)
+                waveform = _waveform_peaks(y)
+            wf_path.write_text(json.dumps(waveform))
+        return {
+            "tempo_bpm": score.tempo_bpm, "duration_s": score.audio.duration_s,
+            "fps": score.audio.fps, "n_frames": score.n_frames,
+            "beats": [b.__dict__ for b in score.beats],
+            "onsets": {k: [round(e.t, 3) for e in v] for k, v in score.onsets.items()},
+            "onset_counts": {k: len(v) for k, v in score.onsets.items()},
+            "waveform": waveform,
+        }
+
+    def _project_payload(run_id: str, with_analysis: bool = False) -> dict:
         rd = runs_root / run_id
         if not (rd / "project.json").exists():
             raise HTTPException(404, "project not found")
-        return {"run_id": run_id, "project": Project.from_json(rd / "project.json").to_dict(),
-                "manifest": load_run(rd)}
+        audio = frozen_audio(rd)
+        payload = {
+            "run_id": run_id,
+            "project": Project.from_json(rd / "project.json").to_dict(),
+            "manifest": load_run(rd),
+            "audio_url": f"/api/runs/{run_id}/files/{audio.name}" if audio else None,
+        }
+        if with_analysis:
+            payload["analysis"] = _analysis_payload(rd)
+        return payload
 
     @app.post("/api/projects")
     def create_project(req: ProjectRequest):
@@ -162,21 +198,11 @@ def create_app(runs_root: str | Path = "runs",
         rec = _recipe_from(req)
         run_dir, project, score = init_project_run(path, rec, runs_root=runs_root,
                                                    seconds=req.seconds)
-        import librosa
-        y, sr = librosa.load(str(path), sr=None, mono=True)
-        payload = _project_payload(run_dir.name)
-        payload["analysis"] = {
-            "tempo_bpm": score.tempo_bpm, "duration_s": score.audio.duration_s,
-            "fps": score.audio.fps, "n_frames": score.n_frames,
-            "beats": [b.__dict__ for b in score.beats],
-            "onset_counts": {k: len(v) for k, v in score.onsets.items()},
-            "waveform": _waveform_peaks(y),
-        }
-        return payload
+        return _project_payload(run_dir.name, with_analysis=True)
 
     @app.get("/api/projects/{run_id}")
     def get_project(run_id: str):
-        return _project_payload(run_id)
+        return _project_payload(run_id, with_analysis=True)
 
     @app.put("/api/projects/{run_id}")
     def update_project(run_id: str, upd: ProjectUpdate):
@@ -227,8 +253,9 @@ def create_app(runs_root: str | Path = "runs",
     @app.post("/api/projects/{run_id}/generate")
     def generate_project(run_id: str):
         rd = runs_root / run_id
-        if not (rd / "fluid").exists():
-            raise HTTPException(400, "run the fluid preview first")
+        if not (rd / "project.json").exists():
+            raise HTTPException(404, "project not found")
+        # run_diffuse rebuilds missing/draft fluid itself, so this always works.
         return {"job_id": jm.submit(lambda progress: run_diffuse(rd, progress=progress),
                                     run_id=run_id, kind="diffuse")}
 

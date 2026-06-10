@@ -29,6 +29,7 @@ export default function App() {
 
       {view === "studio" && (
         <Studio
+          initialRunId={runId}
           onPreview={(rid, jid) => { setRunId(rid); setJobId(jid); setView("render"); }}
         />
       )}

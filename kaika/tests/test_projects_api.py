@@ -58,8 +58,11 @@ def test_preview_then_generate_flow(client, tmp_path):
     assert m["stage"] == "done"
 
 
-def test_generate_before_preview_rejected(client, tmp_path):
+def test_generate_without_preview_builds_fluid(client, tmp_path):
+    """Generate is self-sufficient: it builds the missing full fluid first."""
     aid = _upload(client, tmp_path)
     run_id = client.post("/api/projects", json={"audio_id": aid, "recipe": SMALL,
                                                 "seconds": 0.4}).json()["run_id"]
-    assert client.post(f"/api/projects/{run_id}/generate").status_code == 400
+    job = client.post(f"/api/projects/{run_id}/generate").json()["job_id"]
+    assert _wait(client, job)["status"] == "done"
+    assert client.get(f"/api/runs/{run_id}/final").status_code == 200

@@ -105,3 +105,34 @@ textarea { resize: vertical; min-height: 48px; }
 .sec-chip.sel { outline: 2px solid var(--petale); outline-offset: 1px; }
 .muted { color: var(--brume); font-size: 13px; }
 .err { color: var(--petale); font-size: 13px; margin-top: 8px; }
+
+/* ---- transport & segment ops ---- */
+.transport { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.transport .play {
+  width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--voile);
+  background: var(--white); font-size: 13px; line-height: 1;
+}
+.transport .play:hover { border-color: var(--petale); color: var(--petale); }
+.seg-ops { display: flex; gap: 10px; margin-top: 12px; }
+.btn.slim { width: auto; margin-top: 0; padding: 7px 12px; font-size: 13px; }
+
+/* ---- inspector tabs ---- */
+.insp-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.insp-tabs button {
+  flex: 1; border: 1px solid var(--voile); background: none; color: var(--brume);
+  font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 6px 0; border-radius: 6px;
+}
+.insp-tabs button.active { background: var(--white); color: var(--encre);
+  border-color: var(--brume); }
+
+/* ---- palette & yaml ---- */
+.palette-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.palette-row input[type="color"] {
+  width: 34px; height: 34px; padding: 2px; border: 1px solid var(--voile);
+  border-radius: 6px; background: var(--white); cursor: pointer;
+}
+textarea.yaml { font-family: "Spline Sans Mono", ui-monospace, monospace;
+  font-size: 12px; min-height: 320px; white-space: pre; }
+label.check { display: flex; gap: 8px; align-items: center; font-size: 13px;
+  color: var(--brume); margin-top: 16px; cursor: pointer; }

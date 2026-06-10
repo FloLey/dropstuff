@@ -9,13 +9,15 @@ export interface Segment {
 }
 export interface Analysis {
   tempo_bpm: number; duration_s: number; fps: number; n_frames: number;
-  beats: Beat[]; onset_counts: Record<string, number>; waveform: number[];
+  beats: Beat[]; onsets?: Record<string, number[]>;
+  onset_counts: Record<string, number>; waveform: number[];
 }
 export interface ProjectDoc {
   audio: string; fps: number; seconds: number | null; recipe: any; segments: Segment[];
 }
 export interface ProjectPayload {
-  run_id: string; project: ProjectDoc; manifest: RunManifest; analysis?: Analysis;
+  run_id: string; project: ProjectDoc; manifest: RunManifest;
+  analysis?: Analysis; audio_url?: string | null;
 }
 export interface RecipeEntry { name: string; yaml: string; recipe: any; }
 export interface JobState {
