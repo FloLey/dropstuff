@@ -270,6 +270,29 @@ def create_app(runs_root: str | Path = "runs",
     def jobs():
         return db.all()
 
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str):
+        if not jm.cancel(job_id):
+            raise HTTPException(409, "job not cancellable (unknown or finished)")
+        return {"ok": True}
+
+    @app.get("/api/runs/{run_id}/latest_frame")
+    def latest_frame(run_id: str):
+        """Most recent frame on disk for this run — live peek while rendering."""
+        rd = runs_root / run_id
+        candidates = []
+        for sub in ("styled", "fluid", "seg_preview/fluid"):
+            d = rd / sub
+            if d.is_dir():
+                pngs = list(d.glob("*.png"))
+                if pngs:
+                    candidates.append(max(pngs, key=lambda p: p.stat().st_mtime))
+        if not candidates:
+            raise HTTPException(404, "no frames yet")
+        newest = max(candidates, key=lambda p: p.stat().st_mtime)
+        return FileResponse(newest, media_type="image/png",
+                            headers={"Cache-Control": "no-store"})
+
     @app.websocket("/ws/jobs/{job_id}")
     async def ws_job(ws: WebSocket, job_id: str):
         await ws.accept()

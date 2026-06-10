@@ -136,3 +136,17 @@ textarea.yaml { font-family: "Spline Sans Mono", ui-monospace, monospace;
   font-size: 12px; min-height: 320px; white-space: pre; }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 13px;
   color: var(--brume); margin-top: 16px; cursor: pointer; }
+
+/* ---- gallery compare & live frame ---- */
+.run-card.picked { outline: 2px solid var(--courant); }
+.run-actions { display: flex; align-items: center; justify-content: space-between;
+  margin-top: 8px; }
+.compare-bar { display: flex; align-items: center; justify-content: space-between;
+  margin-top: 20px; }
+.compare { margin-top: 20px; }
+.compare-head { display: flex; justify-content: space-between; align-items: baseline; }
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+.compare-grid video { width: 100%; border-radius: 8px; background: #000; }
+img.live-frame { width: 100%; max-width: 320px; border-radius: 8px;
+  border: 1px solid var(--voile); }
+.badge.cancelled { background: var(--voile); color: var(--brume); }

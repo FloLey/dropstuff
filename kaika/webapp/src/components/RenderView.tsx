@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, JobState, STAGES } from "../api";
 
+const LIVE_POLL_MS = 1200;
+
 interface Props {
   runId: string | null;
   jobId: string | null;
@@ -9,11 +11,14 @@ interface Props {
 
 export default function RenderView({ runId, jobId, onSeeGallery }: Props) {
   const [job, setJob] = useState<JobState | null>(null);
+  const [liveFrame, setLiveFrame] = useState<string | null>(null);
+  const [watchedJob, setWatchedJob] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const watch = (id: string) => {
     wsRef.current?.close();
     setJob(null);
+    setWatchedJob(id);
     wsRef.current = api.watchJob(id, setJob);
   };
 
@@ -21,6 +26,21 @@ export default function RenderView({ runId, jobId, onSeeGallery }: Props) {
     if (jobId) watch(jobId);
     return () => wsRef.current?.close();
   }, [jobId]);
+
+  // live peek: poll the newest frame on disk while the job runs
+  const running = job?.status === "running";
+  useEffect(() => {
+    if (!running || !runId) { setLiveFrame(null); return; }
+    const t = window.setInterval(() => {
+      setLiveFrame(`/api/runs/${runId}/latest_frame?ts=${Date.now()}`);
+    }, LIVE_POLL_MS);
+    return () => window.clearInterval(t);
+  }, [running, runId]);
+
+  const cancel = async () => {
+    if (!watchedJob) return;
+    await fetch(`/api/jobs/${watchedJob}/cancel`, { method: "POST" }).catch(() => {});
+  };
 
   const generate = async () => {
     if (!runId) return;
@@ -65,6 +85,20 @@ export default function RenderView({ runId, jobId, onSeeGallery }: Props) {
           })}
         </div>
         {job?.status === "error" && <p className="err">Error: {job.error}</p>}
+        {job?.status === "cancelled" && <p className="muted">Cancelled.</p>}
+        {running && (
+          <button className="btn ghost slim" style={{ marginTop: 14 }} onClick={cancel}>
+            Cancel render
+          </button>
+        )}
+        {running && liveFrame && (
+          <div style={{ marginTop: 14 }}>
+            <p className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Live frame</p>
+            <img className="live-frame" src={liveFrame}
+              onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
+              onLoad={(e) => ((e.target as HTMLImageElement).style.display = "block")} />
+          </div>
+        )}
       </div>
 
       <aside className="card">

@@ -36,7 +36,9 @@ export default function App() {
       {view === "render" && (
         <RenderView runId={runId} jobId={jobId} onSeeGallery={() => setView("gallery")} />
       )}
-      {view === "gallery" && <Gallery />}
+      {view === "gallery" && (
+        <Gallery onOpenInStudio={(rid) => { setRunId(rid); setView("studio"); }} />
+      )}
     </div>
   );
 }

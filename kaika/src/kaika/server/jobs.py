@@ -19,6 +19,13 @@ from .db import JobDB
 logger = logging.getLogger("kaika.jobs")
 
 
+class JobCancelled(BaseException):
+    """Raised inside a job's progress callback to stop it cooperatively.
+
+    Inherits BaseException (like KeyboardInterrupt) so the pipeline's own
+    ``except Exception`` error handling lets it pass through untouched."""
+
+
 class JobManager:
     def __init__(self, runs_root: str | Path, db: JobDB):
         self.runs_root = Path(runs_root)
@@ -58,6 +65,16 @@ class JobManager:
             j = self._jobs.get(job_id)
             return {k: v for k, v in j.items() if not k.startswith("_")} if j else None
 
+    def cancel(self, job_id: str) -> bool:
+        """Request cooperative cancellation; takes effect at the next progress
+        tick (running) or when dequeued (queued). Returns False if unknown/finished."""
+        with self._lock:
+            j = self._jobs.get(job_id)
+            if j is None or j["status"] in ("done", "error", "cancelled"):
+                return False
+            j["_cancel"] = True
+            return True
+
     def _set(self, job_id: str, **fields):
         with self._lock:
             self._jobs[job_id].update(fields)
@@ -72,18 +89,29 @@ class JobManager:
 
     def _run_one(self, job_id: str):
         with self._lock:
-            fn = self._jobs[job_id]["_fn"]
+            job = self._jobs[job_id]
+            fn = job["_fn"]
+            if job.get("_cancel"):
+                job["status"] = "cancelled"
+                self.db.update(job_id, status="cancelled")
+                return
         self._set(job_id, status="running")
         self.db.update(job_id, status="running")
 
         def progress(stage, done, total):
-            self._set(job_id, stage=stage, done=done, total=total)
+            with self._lock:
+                if self._jobs[job_id].get("_cancel"):
+                    raise JobCancelled()
+                self._jobs[job_id].update(stage=stage, done=done, total=total)
 
         try:
             res = fn(progress)
             run_id = getattr(res, "run_id", None) or self._jobs[job_id].get("run_id")
             self._set(job_id, status="done", run_id=run_id, done=1, total=1)
             self.db.update(job_id, status="done", run_id=run_id or "")
+        except JobCancelled:
+            self._set(job_id, status="cancelled")
+            self.db.update(job_id, status="cancelled")
         except Exception as e:  # noqa
             logger.exception("job %s failed", job_id)
             self._set(job_id, status="error", error=f"{type(e).__name__}: {e}")
