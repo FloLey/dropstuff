@@ -4,12 +4,12 @@ seed: 1107
 fluid:
   resolution: 256
   render_resolution: 512
-  dissipation: 0.95
+  dissipation: 0.92
   lookahead_s: 6.0
-  palette: ["#1a1a1a", "#3a3a3a", "#5c5c5c", "#8a8a8a", "#c9c9c9"]
+  palette: ["#2a2a2a", "#4a4a4a", "#6c6c6c", "#9a9a9a", "#d9d9d9"]
   splats:
-    low:  { radius: 0.16, force: 7000, placement: anchored }
-    high: { radius: 0.025, force: 2600, placement: scatter, max_per_beat: 7 }
+    low:  { radius: 0.16, force: 7000, placement: anchored, lifetime_s: 1.4, emit: 0.16, drift: 0.7 }
+    high: { radius: 0.025, force: 2600, placement: scatter, max_per_beat: 7, lifetime_s: 0.25, emit: 0.10, drift: 0.3 }
   vorticity: { min: 4, max: 24, driver: rms }
 
 diffusion:

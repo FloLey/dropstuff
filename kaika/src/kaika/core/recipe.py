@@ -40,6 +40,9 @@ class Splat:
     force: float = 6000.0
     placement: str = "scatter"      # "anchored" | "scatter"
     max_per_beat: int = 4
+    lifetime_s: float = 0.5         # how long a spawned source lives, then dies
+    emit: float = 0.2               # peak dye emission while alive
+    drift: float = 0.4              # how strongly the source is carried by the flow
 
 
 @dataclass
@@ -53,23 +56,24 @@ class Vorticity:
 class FluidConfig:
     resolution: int = 256           # simulation grid (square)
     render_resolution: int = 512    # output frame size
-    dissipation: float = 0.94       # density decay per step (balances emitters)
+    dissipation: float = 0.90       # density decay: dye clears ~1s after a source dies
     velocity_dissipation: float = 0.96   # velocity decay per step (bounds energy)
     viscosity: float = 0.0
     lookahead_s: float = 8.0
     splats: Dict[str, Splat] = field(default_factory=lambda: {
-        "low": Splat(radius=0.12, force=9000.0, placement="anchored"),
-        "high": Splat(radius=0.03, force=3500.0, placement="scatter", max_per_beat=5),
+        "low": Splat(radius=0.12, force=9000.0, placement="anchored",
+                     lifetime_s=1.0, emit=0.18, drift=0.6),
+        "high": Splat(radius=0.03, force=3500.0, placement="scatter",
+                      max_per_beat=5, lifetime_s=0.3, emit=0.11, drift=0.3),
     })
     vorticity: Vorticity = field(default_factory=Vorticity)
-    # Continuous forcing so the fluid is *always* alive between onsets.
-    ambient_strength: float = 3.0       # curl-noise stirring amplitude (cells/frame)
+    # Gentle, RMS-driven ambient stirring so calm passages drift and loud ones
+    # churn (the fluid "stretches" when quiet). Colour is NOT injected here.
+    ambient_strength: float = 1.6       # curl-noise stirring amplitude (cells/frame)
     ambient_scale: float = 2.6          # spatial frequency of the noise
     ambient_speed: float = 0.16         # temporal evolution per frame
-    emitter_count: int = 6              # persistent dye sources
-    emitter_rate: float = 0.05          # dye injected per emitter per frame
     # Rendering (HDR -> filmic), so the frame is beautiful on its own.
-    exposure: float = 1.7
+    exposure: float = 1.9
     bloom: float = 0.65
     background: float = 0.04
     palette: List[str] = field(default_factory=lambda: [

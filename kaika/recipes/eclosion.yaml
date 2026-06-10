@@ -4,11 +4,11 @@ seed: 4217
 fluid:
   resolution: 256
   render_resolution: 512
-  dissipation: 0.94
+  dissipation: 0.90
   lookahead_s: 8.0
   splats:
-    low:  { radius: 0.12, force: 9000, placement: anchored }
-    high: { radius: 0.03, force: 3500, placement: scatter, max_per_beat: 5 }
+    low:  { radius: 0.12, force: 9000, placement: anchored, lifetime_s: 1.0, emit: 0.18, drift: 0.6 }
+    high: { radius: 0.03, force: 3500, placement: scatter, max_per_beat: 5, lifetime_s: 0.3, emit: 0.11, drift: 0.3 }
   vorticity: { min: 8, max: 38, driver: rms }
 
 diffusion:

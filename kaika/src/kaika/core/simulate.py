@@ -85,6 +85,19 @@ def _curl_noise(gx: np.ndarray, gy: np.ndarray, t: float, scale: float):
 
 
 @dataclass
+class _Source:
+    """A transient dye source: born on a musical event, emits, then dies."""
+    x: float
+    y: float
+    color: np.ndarray
+    radius: float
+    emit: float
+    life: int
+    drift: float
+    age: int = 0
+
+
+@dataclass
 class SimResult:
     fluid_dir: Path
     velocity_dir: Path
@@ -270,57 +283,70 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
 
     rng = np.random.default_rng(recipe.seed + 1)
     palette = [_hex_to_rgb(c) for c in (fc.palette or ["#B84A74"])]
-    emitters = rng.uniform(0.14, 0.86, (max(1, fc.emitter_count), 2))
-    emit_colors = [palette[k % len(palette)] for k in range(len(emitters))]
     gx = sim.xs / fc.resolution
     gy = sim.ys / fc.resolution
     anchor = np.array([0.5, 0.5])           # centre of gravity for kicks
     dt = 1.0
     stats = {"kinetic_energy": [], "total_density": []}
+    sources: List[_Source] = []
+
+    def spawn(x, y, color, radius, emit, life_s, drift, force, mag):
+        """Birth a transient source: a velocity/dye puff now + ongoing emission."""
+        ang = rng.uniform(0, 2 * np.pi)
+        sim.add_splat(x, y, radius, force * (0.5 + mag), color * 1.4, ang)
+        sources.append(_Source(x=x, y=y, color=color, radius=radius,
+                               emit=emit * (0.5 + mag), life=max(1, int(life_s * fps)),
+                               drift=drift))
 
     render_res = fc.render_resolution
     bloom_sigma = max(1.0, fc.resolution / 48)
+    n = fc.resolution
     for i in range(n_frames):
         fdata = score.frames[i]
         rms = fdata.rms
         t = i * fc.ambient_speed
 
-        # (1) Ambient curl-noise: the fluid is ALWAYS moving; louder = stronger.
+        # Ambient stirring carries existing dye — RMS-driven, no colour injected.
         ua, va = _curl_noise(gx, gy, t, fc.ambient_scale)
-        amp = fc.ambient_strength * (0.45 + 0.9 * rms)
+        amp = fc.ambient_strength * (0.12 + 0.88 * rms)
         sim.add_force(ua * amp, va * amp)
 
-        # (2) Persistent dye emitters keep the frame full of moving colour.
-        amt = fc.emitter_rate * (0.5 + 1.3 * rms)
-        for k, (px, py) in enumerate(emitters):
-            jx = 0.06 * np.sin(t * 0.7 + k)
-            jy = 0.06 * np.cos(t * 0.5 + k * 1.3)
-            sim.add_dye(float(px + jx), float(py + jy), 0.06, emit_colors[k], amt)
-
-        # (3) Kicks: strong impulse + dye burst, anchored near the centre.
+        # Kicks: big, slow source anchored near the centre of gravity.
         if low_cfg:
             for e in low_by_frame[i]:
-                jitter = rng.normal(0, 0.05, 2)
-                px, py = np.clip(anchor + jitter, 0.05, 0.95)
-                ang = rng.uniform(0, 2 * np.pi)
-                sim.add_splat(px, py, low_cfg.radius, low_cfg.force * (0.5 + e.mag),
-                              palette[0] * 1.6, ang)
-        # (4) Hats: small vivid swirls, "pop everywhere".
+                px, py = np.clip(anchor + rng.normal(0, 0.05, 2), 0.05, 0.95)
+                spawn(float(px), float(py), palette[0], low_cfg.radius,
+                      low_cfg.emit, low_cfg.lifetime_s, low_cfg.drift,
+                      low_cfg.force, e.mag)
+        # Hats: small, short-lived sources that pop everywhere then vanish.
         if high_cfg:
             for j, e in enumerate(high_by_frame[i][: high_cfg.max_per_beat]):
-                px, py = rng.uniform(0.1, 0.9, 2)
-                ang = rng.uniform(0, 2 * np.pi)
-                col = palette[(i + j) % len(palette)]
-                sim.add_splat(px, py, high_cfg.radius, high_cfg.force * (0.5 + e.mag),
-                              col * 1.3, ang)
+                px, py = rng.uniform(0.08, 0.92, 2)
+                spawn(float(px), float(py), palette[(i + j) % len(palette)],
+                      high_cfg.radius, high_cfg.emit, high_cfg.lifetime_s,
+                      high_cfg.drift, high_cfg.force, e.mag)
 
-        # (5) Lookahead: sub-visible swirl building tension before a drop.
+        # Lookahead: faint sources spawn before a drop, building tension early.
         boost = _lookahead_boost(score, i, fps, fc.lookahead_s)
-        if boost > 0:
-            for _ in range(2):
-                px, py = rng.uniform(0.2, 0.8, 2)
-                ang = rng.uniform(0, 2 * np.pi)
-                sim.add_splat(px, py, 0.12, 1600.0 * boost, palette[0] * 0.2 * boost, ang)
+        if boost > 0 and i % 3 == 0:
+            px, py = rng.uniform(0.2, 0.8, 2)
+            spawn(float(px), float(py), palette[0] * 0.5, 0.10,
+                  0.10 * boost, 0.7, 0.5, 1500.0 * boost, 0.0)
+
+        # Emit from every living source (envelope 0->1->0), drift with the flow, age out.
+        still: List[_Source] = []
+        for s in sources:
+            env = float(np.sin(np.pi * s.age / s.life))
+            sim.add_dye(s.x, s.y, s.radius, s.color, s.emit * env)
+            if s.drift > 0:
+                xi = int(np.clip(s.x * n, 0, n - 1))
+                yi = int(np.clip(s.y * n, 0, n - 1))
+                s.x = (s.x + s.drift * float(sim.u[yi, xi]) / n) % 1.0
+                s.y = (s.y + s.drift * float(sim.v[yi, xi]) / n) % 1.0
+            s.age += 1
+            if s.age < s.life:
+                still.append(s)
+        sources = still
 
         # RMS drives vorticity between recipe min/max (scaled to the velocity regime).
         vmin, vmax = fc.vorticity.min, fc.vorticity.max
