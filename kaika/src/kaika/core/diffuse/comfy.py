@@ -104,7 +104,9 @@ class ComfyDiffuser(Diffuser):
         chunk_frames = max(2, int(round(rec.chunk_s * fps)))
         boundaries = section_boundary_frames(req.score, req.n_frames)
         chunks = plan_chunks(req.n_frames, chunk_frames, rec.overlap_frames, boundaries)
-        per_frame = build_prompt_schedule(req.score, req.recipe, req.n_frames)
+        # Per-segment prompts from the project take precedence over recipe labels.
+        per_frame = req.prompts or build_prompt_schedule(req.score, req.recipe,
+                                                          req.n_frames)
         return chunks, per_frame
 
     def run(self, req: DiffuseRequest,

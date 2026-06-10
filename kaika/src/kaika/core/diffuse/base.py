@@ -26,6 +26,7 @@ class DiffuseRequest:
     score: Score
     recipe: Recipe
     n_frames: int
+    prompts: Optional[List[str]] = None   # per-frame prompts (per-segment); overrides recipe
 
 
 @dataclass
