@@ -299,10 +299,19 @@ def _lookahead_boost(score: Score, frame_i: int, fps: int, lookahead_s: float) -
 def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
              max_frames: Optional[int] = None,
              progress: Optional[ProgressFn] = None,
-             frame_configs: Optional[List[FluidConfig]] = None) -> SimResult:
+             frame_configs: Optional[List[FluidConfig]] = None,
+             render_range: Optional[tuple] = None,
+             warmup_frames: int = 0,
+             write_velocity: bool = True) -> SimResult:
     """Run the fluid sim. If ``frame_configs`` is given (one FluidConfig per
     frame), the *non-structural* parameters vary per frame — this is how a single
     continuous simulation takes different parameters per musical segment.
+
+    ``render_range=(f0, f1)`` simulates only that window (plus ``warmup_frames``
+    of unrendered lead-in so the state converges to what the full run would
+    hold — dye and velocity memory are short), writing frames renumbered from 0.
+    ``write_velocity=False`` skips the per-frame .npy dumps (previews don't need
+    them; only E3/E4 do).
     """
     import imageio.v2 as imageio
 
@@ -310,16 +319,23 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
     fluid_dir = out_dir / "fluid"
     vel_dir = out_dir / "velocity"
     fluid_dir.mkdir(parents=True, exist_ok=True)
-    vel_dir.mkdir(parents=True, exist_ok=True)
+    if write_velocity:
+        vel_dir.mkdir(parents=True, exist_ok=True)
 
     fps = score.audio.fps
     n_frames = score.n_frames if max_frames is None else min(score.n_frames, max_frames)
+    if render_range is not None:
+        render_start = max(0, int(render_range[0]))
+        sim_end = min(n_frames, int(render_range[1]))
+        sim_start = max(0, render_start - max(0, warmup_frames))
+    else:
+        render_start, sim_start, sim_end = 0, 0, n_frames
     base_fc = recipe.fluid               # structural params (resolution) come from here
     sim = FluidSim(base_fc.resolution, base_fc.dissipation, base_fc.viscosity,
                    recipe.seed, vel_dissipation=base_fc.velocity_dissipation)
 
-    low_by_frame = _build_event_index(score.onsets.get("low", []), fps, n_frames)
-    high_by_frame = _build_event_index(score.onsets.get("high", []), fps, n_frames)
+    low_by_frame = _build_event_index(score.onsets.get("low", []), fps, sim_end)
+    high_by_frame = _build_event_index(score.onsets.get("high", []), fps, sim_end)
 
     rng = np.random.default_rng(recipe.seed + 1)
     gx = sim.xs / base_fc.resolution
@@ -345,7 +361,8 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
     render_res = base_fc.render_resolution
     bloom_sigma = max(1.0, base_fc.resolution / 48)
     n = base_fc.resolution
-    for i in range(n_frames):
+    total_steps = sim_end - sim_start
+    for step, i in enumerate(range(sim_start, sim_end)):
         # Per-frame (per-segment) parameters; structural params stay from base_fc.
         fc = frame_configs[i] if frame_configs is not None else base_fc
         sim.dissipation = fc.dissipation
@@ -394,22 +411,23 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
         vort = (vmin + (vmax - vmin) * rms) * VORT_K
         sim.step(dt, vort)
 
-        # Render: HDR density -> filmic tone-map + bloom over a dark field.
-        frame = _render_frame(sim.density, fc.exposure, fc.bloom, bloom_sigma,
-                              fc.background)
-        if render_res != base_fc.resolution:
-            frame = cv2.resize(frame, (render_res, render_res),
-                               interpolation=cv2.INTER_LINEAR)
-        imageio.imwrite(fluid_dir / f"{i:06d}.png", frame)
-        np.save(vel_dir / f"{i:06d}.npy",
-                np.stack([sim.u, sim.v], axis=-1).astype(np.float32))
-
-        stats["kinetic_energy"].append(round(sim.kinetic_energy(), 6))
-        stats["total_density"].append(round(sim.total_density(), 6))
+        # Render only the requested window (warmup frames advance state silently).
+        if i >= render_start:
+            frame = _render_frame(sim.density, fc.exposure, fc.bloom, bloom_sigma,
+                                  fc.background)
+            if render_res != base_fc.resolution:
+                frame = cv2.resize(frame, (render_res, render_res),
+                                   interpolation=cv2.INTER_LINEAR)
+            imageio.imwrite(fluid_dir / f"{i - render_start:06d}.png", frame)
+            if write_velocity:
+                np.save(vel_dir / f"{i - render_start:06d}.npy",
+                        np.stack([sim.u, sim.v], axis=-1).astype(np.float32))
+            stats["kinetic_energy"].append(round(sim.kinetic_energy(), 6))
+            stats["total_density"].append(round(sim.total_density(), 6))
         if progress:
-            progress(i + 1, n_frames)
+            progress(step + 1, total_steps)
 
     stats_path = out_dir / "fluid_stats.json"
     stats_path.write_text(json.dumps(stats))
     return SimResult(fluid_dir=fluid_dir, velocity_dir=vel_dir, stats_path=stats_path,
-                     n_frames=n_frames, resolution=render_res)
+                     n_frames=sim_end - render_start, resolution=render_res)

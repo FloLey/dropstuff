@@ -52,8 +52,12 @@ export const api = {
   updateProject: (runId: string, body: { segments?: Segment[]; recipe?: any; seconds?: number }) =>
     fetch(`/api/projects/${runId}`, { method: "PUT", headers: JSON_H, body: JSON.stringify(body) })
       .then(j<ProjectPayload>),
-  previewProject: (runId: string) =>
-    fetch(`/api/projects/${runId}/preview`, { method: "POST" }).then(j<{ job_id: string }>),
+  previewProject: (runId: string, draft = false) =>
+    fetch(`/api/projects/${runId}/preview`, { method: "POST", headers: JSON_H, body: JSON.stringify({ draft }) })
+      .then(j<{ job_id: string }>),
+  previewSegment: (runId: string, index: number, draft = true) =>
+    fetch(`/api/projects/${runId}/preview_segment`, { method: "POST", headers: JSON_H, body: JSON.stringify({ index, draft }) })
+      .then(j<{ job_id: string }>),
   generateProject: (runId: string) =>
     fetch(`/api/projects/${runId}/generate`, { method: "POST" }).then(j<{ job_id: string }>),
 
@@ -62,6 +66,7 @@ export const api = {
   run: (id: string) => fetch(`/api/runs/${id}`).then(j<RunManifest>),
   finalUrl: (id: string) => `/api/runs/${id}/final`,
   previewUrl: (id: string) => `/api/runs/${id}/files/fluid_preview.mp4`,
+  segPreviewUrl: (id: string) => `/api/runs/${id}/files/segment_preview.mp4`,
   fileUrl: (id: string, sub: string) => `/api/runs/${id}/files/${sub}`,
 
   watchJob: (id: string, onMsg: (s: JobState) => void): WebSocket => {

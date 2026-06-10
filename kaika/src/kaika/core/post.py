@@ -71,7 +71,8 @@ def assemble(frames_dir: str | Path, audio_path: str | Path, out_path: str | Pat
              upscale: bool = False, upscale_to: int = 2048,
              pattern: str = "%06d.png",
              score: Optional[Score] = None,
-             fluid_stats_path: Optional[str | Path] = None) -> PostResult:
+             fluid_stats_path: Optional[str | Path] = None,
+             audio_offset_s: float = 0.0) -> PostResult:
     frames_dir = Path(frames_dir)
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,6 +91,8 @@ def assemble(frames_dir: str | Path, audio_path: str | Path, out_path: str | Pat
     has_audio = Path(audio_path).exists()
     args = ["-framerate", str(fps), "-i", str(frames_dir / pattern)]
     if has_audio:
+        if audio_offset_s > 0:
+            args += ["-ss", f"{audio_offset_s:.3f}"]   # slice audio for extracts
         args += ["-i", str(audio_path), "-map", "0:v:0", "-map", "1:a:0"]
     else:
         args += ["-map", "0:v:0"]

@@ -101,10 +101,26 @@ def init_project_run(audio_path: str | Path, recipe: Recipe, runs_root: str | Pa
     return run_dir, project, score
 
 
+DRAFT_SIM_RES = 112          # draft-mode caps: fast enough to iterate in seconds
+DRAFT_RENDER_RES = 224
+SEGMENT_WARMUP_S = 2.0       # unrendered lead-in so a window preview converges
+
+
+def _draft_recipe(recipe: Recipe) -> Recipe:
+    """A copy of the recipe with resolution capped for fast draft previews."""
+    import copy
+    r = copy.deepcopy(recipe)
+    r.fluid.resolution = min(r.fluid.resolution, DRAFT_SIM_RES)
+    r.fluid.render_resolution = min(r.fluid.render_resolution, DRAFT_RENDER_RES)
+    return r
+
+
 def run_fluid(project: Project, audio_path: str | Path, runs_root: str | Path = "runs",
               run_id: Optional[str] = None, score: Optional[Score] = None,
+              draft: bool = False,
               progress: Optional[ProgressFn] = None) -> RunResult:
-    """E1+E2+E3 + a previewable fluid clip (no diffusion)."""
+    """E1+E2 + a previewable fluid clip (no diffusion; control is deferred to
+    the diffuse stage so iteration stays fast)."""
     audio_path = Path(audio_path)
     run_id = run_id or _new_run_id()
     run_dir = Path(runs_root) / run_id
@@ -136,17 +152,14 @@ def run_fluid(project: Project, audio_path: str | Path, runs_root: str | Path = 
         _emit(progress, "analyze", 1, 1)
 
         cfgs = project.frame_configs(n)
-        sim = simulate(score, recipe, run_dir, max_frames=max_frames,
+        sim_recipe = _draft_recipe(recipe) if draft else recipe
+        sim = simulate(score, sim_recipe, run_dir, max_frames=max_frames,
                        frame_configs=cfgs,
                        progress=lambda d, t: _emit(progress, "simulate", d, t))
-        manifest["stages"]["simulate"] = {"done": True, "n_frames": sim.n_frames}
-
-        signals = recipe.diffusion.control or ["depth", "flow"]
-        ctrl = generate_control(
-            sim.fluid_dir, sim.velocity_dir, run_dir, signals=signals,
-            render_resolution=recipe.fluid.render_resolution,
-            progress=lambda d, t: _emit(progress, "control", d, t))
-        manifest["stages"]["control"] = {"done": True, "signals": list(ctrl.dirs)}
+        manifest["stages"]["simulate"] = {"done": True, "n_frames": sim.n_frames,
+                                          "draft": draft}
+        # E3 (control signals) is deferred to run_diffuse: previews don't need it.
+        manifest["stages"].pop("control", None)
 
         _emit(progress, "post", 0, 1)
         preview = run_dir / "fluid_preview.mp4"
@@ -172,20 +185,85 @@ def run_fluid(project: Project, audio_path: str | Path, runs_root: str | Path = 
         raise
 
 
+def run_segment_preview(run_dir: str | Path, segment_index: int, draft: bool = True,
+                        progress: Optional[ProgressFn] = None) -> RunResult:
+    """Fluid preview of ONE segment: simulate just its window (plus a short
+    unrendered warm-up) and mux it with that slice of the audio. Seconds, not
+    minutes — this is the iteration gesture. Does not touch the full fluid/."""
+    run_dir = Path(run_dir)
+    project = Project.from_json(run_dir / "project.json")
+    score = Score.from_json(run_dir / "score.json")
+    if not (0 <= segment_index < len(project.segments)):
+        raise IndexError(f"segment {segment_index} out of range")
+    seg = project.segments[segment_index]
+    fps = project.fps
+    cap = int(round(project.seconds * fps)) if project.seconds else score.n_frames
+    n_total = min(score.n_frames, cap)
+    f0 = max(0, min(n_total - 1, int(round(seg.start * fps))))
+    f1 = max(f0 + 1, min(n_total, int(round(seg.end * fps))))
+
+    recipe = _draft_recipe(project.recipe) if draft else project.recipe
+    out_dir = run_dir / "seg_preview"
+    shutil.rmtree(out_dir, ignore_errors=True)
+
+    sim = simulate(score, recipe, out_dir, max_frames=n_total,
+                   frame_configs=project.frame_configs(n_total),
+                   render_range=(f0, f1),
+                   warmup_frames=int(SEGMENT_WARMUP_S * fps),
+                   write_velocity=False,
+                   progress=lambda d, t: _emit(progress, "simulate", d, t))
+
+    _emit(progress, "post", 0, 1)
+    preview = run_dir / "segment_preview.mp4"
+    audio = frozen_audio(run_dir) or (run_dir / "missing.wav")
+    assemble(sim.fluid_dir, audio, preview, fps=fps,
+             aspect=project.recipe.post.aspect, audio_offset_s=f0 / fps)
+    _emit(progress, "post", 1, 1)
+
+    manifest = _load_manifest(run_dir)
+    manifest["segment_preview"] = {"index": segment_index, "start": round(f0 / fps, 3),
+                                   "end": round(f1 / fps, 3), "draft": draft}
+    _save_manifest(run_dir, manifest)
+    return RunResult(run_id=manifest.get("id", run_dir.name), run_dir=run_dir,
+                     final=preview, n_frames=sim.n_frames, sync_lag=0, sync_corr=0.0,
+                     backend="fluid_segment")
+
+
 def run_diffuse(run_dir: str | Path,
                 progress: Optional[ProgressFn] = None) -> RunResult:
-    """E4+E5 resuming a fluid run, using the project's per-segment prompts."""
+    """E4+E5 resuming a fluid run, using the project's per-segment prompts.
+
+    Regenerates prerequisites transparently: a draft-quality fluid is re-simulated
+    at full quality, and control signals (E3, deferred from previews) are built
+    here if missing.
+    """
     run_dir = Path(run_dir)
     project = Project.from_json(run_dir / "project.json")
     score = Score.from_json(run_dir / "score.json")
     recipe = project.recipe
     manifest = _load_manifest(run_dir)
+
+    # A draft preview is not good enough to feed E4 — redo the fluid full-res.
+    if manifest.get("stages", {}).get("simulate", {}).get("draft"):
+        audio = frozen_audio(run_dir)
+        run_fluid(project, audio, runs_root=run_dir.parent, run_id=run_dir.name,
+                  score=score, draft=False, progress=progress)
+        manifest = _load_manifest(run_dir)
+
     manifest["stage"] = "diffuse_running"
     _save_manifest(run_dir, manifest)
 
     try:
         fluid_dir = run_dir / "fluid"
         n = len(list(fluid_dir.glob("*.png")))
+        signals = recipe.diffusion.control or ["depth", "flow"]
+        missing = [s for s in signals if not (run_dir / "control" / s).exists()]
+        if missing:
+            ctrl = generate_control(
+                fluid_dir, run_dir / "velocity", run_dir, signals=signals,
+                render_resolution=recipe.fluid.render_resolution,
+                progress=lambda d, t: _emit(progress, "control", d, t))
+            manifest["stages"]["control"] = {"done": True, "signals": list(ctrl.dirs)}
         control_dirs = {s: run_dir / "control" / s for s in ALL_SIGNALS
                         if (run_dir / "control" / s).exists()}
         diffuser = D.get_diffuser(recipe)

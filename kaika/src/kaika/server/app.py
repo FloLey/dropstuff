@@ -24,7 +24,8 @@ from ..core.analyze import analyze
 from ..core.project import Project
 from ..core.score import Score
 from ..core.pipeline import (load_run, list_runs, run_pipeline, run_fluid,
-                             run_diffuse, init_project_run, frozen_audio)
+                             run_diffuse, run_segment_preview, init_project_run,
+                             frozen_audio)
 from .db import JobDB
 from .jobs import JobManager
 
@@ -49,6 +50,15 @@ class ProjectUpdate(BaseModel):
     segments: Optional[list] = None
     recipe: Optional[dict] = None
     seconds: Optional[float] = None
+
+
+class PreviewRequest(BaseModel):
+    draft: bool = False
+
+
+class SegmentPreviewRequest(BaseModel):
+    index: int
+    draft: bool = True
 
 
 def _waveform_peaks(y: np.ndarray, buckets: int = 800) -> list:
@@ -185,7 +195,7 @@ def create_app(runs_root: str | Path = "runs",
         return _project_payload(run_id)
 
     @app.post("/api/projects/{run_id}/preview")
-    def preview_project(run_id: str):
+    def preview_project(run_id: str, req: PreviewRequest = PreviewRequest()):
         rd = runs_root / run_id
         if not (rd / "project.json").exists():
             raise HTTPException(404, "project not found")
@@ -197,9 +207,22 @@ def create_app(runs_root: str | Path = "runs",
             if audio is None:
                 raise FileNotFoundError("frozen audio missing for project")
             return run_fluid(proj, audio, runs_root=runs_root, run_id=run_id,
-                             score=score, progress=progress)
+                             score=score, draft=req.draft, progress=progress)
 
         return {"job_id": jm.submit(task, run_id=run_id, kind="fluid")}
+
+    @app.post("/api/projects/{run_id}/preview_segment")
+    def preview_segment(run_id: str, req: SegmentPreviewRequest):
+        rd = runs_root / run_id
+        if not (rd / "project.json").exists():
+            raise HTTPException(404, "project not found")
+        n_segs = len(Project.from_json(rd / "project.json").segments)
+        if not (0 <= req.index < n_segs):
+            raise HTTPException(400, f"segment index {req.index} out of range")
+        return {"job_id": jm.submit(
+            lambda progress: run_segment_preview(rd, req.index, draft=req.draft,
+                                                 progress=progress),
+            run_id=run_id, kind="fluid_segment")}
 
     @app.post("/api/projects/{run_id}/generate")
     def generate_project(run_id: str):
