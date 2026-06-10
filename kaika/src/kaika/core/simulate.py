@@ -277,7 +277,12 @@ def _lookahead_boost(score: Score, frame_i: int, fps: int, lookahead_s: float) -
 
 def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
              max_frames: Optional[int] = None,
-             progress: Optional[ProgressFn] = None) -> SimResult:
+             progress: Optional[ProgressFn] = None,
+             frame_configs: Optional[List["object"]] = None) -> SimResult:
+    """Run the fluid sim. If ``frame_configs`` is given (one FluidConfig per
+    frame), the *non-structural* parameters vary per frame — this is how a single
+    continuous simulation takes different parameters per musical segment.
+    """
     import imageio.v2 as imageio
 
     out_dir = Path(out_dir)
@@ -288,21 +293,19 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
 
     fps = score.audio.fps
     n_frames = score.n_frames if max_frames is None else min(score.n_frames, max_frames)
-    fc = recipe.fluid
-    sim = FluidSim(fc.resolution, fc.dissipation, fc.viscosity, recipe.seed,
-                   vel_dissipation=fc.velocity_dissipation)
+    base_fc = recipe.fluid               # structural params (resolution) come from here
+    sim = FluidSim(base_fc.resolution, base_fc.dissipation, base_fc.viscosity,
+                   recipe.seed, vel_dissipation=base_fc.velocity_dissipation)
 
-    low_cfg = fc.splats.get("low")
-    high_cfg = fc.splats.get("high")
     low_by_frame = _build_event_index(score.onsets.get("low", []), fps, n_frames)
     high_by_frame = _build_event_index(score.onsets.get("high", []), fps, n_frames)
 
     rng = np.random.default_rng(recipe.seed + 1)
-    palette = [_hex_to_rgb(c) for c in (fc.palette or ["#B84A74"])]
-    gx = sim.xs / fc.resolution
-    gy = sim.ys / fc.resolution
+    gx = sim.xs / base_fc.resolution
+    gy = sim.ys / base_fc.resolution
     anchor = np.array([0.5, 0.5])           # centre of gravity for kicks
     dt = 1.0
+    t_phase = 0.0                           # continuous ambient phase across segments
     stats = {"kinetic_energy": [], "total_density": []}
     sources: List[_Source] = []
 
@@ -318,13 +321,21 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
                                drift=cfg.drift, dx=dx, dy=dy, speed=cfg.speed,
                                jet=0.35 * impulse))
 
-    render_res = fc.render_resolution
-    bloom_sigma = max(1.0, fc.resolution / 48)
-    n = fc.resolution
+    render_res = base_fc.render_resolution
+    bloom_sigma = max(1.0, base_fc.resolution / 48)
+    n = base_fc.resolution
     for i in range(n_frames):
+        # Per-frame (per-segment) parameters; structural params stay from base_fc.
+        fc = frame_configs[i] if frame_configs is not None else base_fc
+        sim.dissipation = fc.dissipation
+        sim.vel_dissipation = fc.velocity_dissipation
+        palette = [_hex_to_rgb(c) for c in (fc.palette or ["#B84A74"])]
+        low_cfg = fc.splats.get("low")
+        high_cfg = fc.splats.get("high")
         fdata = score.frames[i]
         rms = fdata.rms
-        t = i * fc.ambient_speed
+        t = t_phase
+        t_phase += fc.ambient_speed
 
         # Ambient stirring carries existing dye — RMS-driven, no colour injected.
         ua, va = _curl_noise(gx, gy, t, fc.ambient_scale)
@@ -386,7 +397,7 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
             ldr = ldr + fc.bloom * bloom
         out = fc.background + (1.0 - fc.background) * np.clip(ldr, 0.0, 1.0)
         frame = (np.clip(out, 0.0, 1.0) * 255).astype(np.uint8)
-        if render_res != fc.resolution:
+        if render_res != base_fc.resolution:
             frame = cv2.resize(frame, (render_res, render_res),
                                interpolation=cv2.INTER_LINEAR)
         imageio.imwrite(fluid_dir / f"{i:06d}.png", frame)
