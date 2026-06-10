@@ -28,7 +28,7 @@ import numpy as np
 import cv2
 
 from .score import Score
-from .recipe import Recipe
+from .recipe import Recipe, FluidConfig
 
 ProgressFn = Callable[[int, int], None]
 
@@ -37,28 +37,15 @@ FORCE_K = 0.04
 # Scales recipe vorticity into the velocity regime; confinement is a positive
 # feedback, so this must keep the per-step force a small fraction of velocity.
 VORT_K = 0.015
-
-
-def _hue_to_rgb(hue: np.ndarray) -> np.ndarray:
-    """Vectorised HSV(h, 1, 1) -> RGB for a hue array in [0, 1]."""
-    h6 = (hue % 1.0) * 6.0
-    i = np.floor(h6).astype(int)
-    f = h6 - i
-    p = np.zeros_like(hue)
-    q = 1.0 - f
-    t = f
-    r = np.choose(i % 6, [1, q, p, p, t, 1.0 * np.ones_like(hue)])
-    g = np.choose(i % 6, [t, 1.0 * np.ones_like(hue), 1, q, p, p])
-    b = np.choose(i % 6, [p, p, t, 1.0 * np.ones_like(hue), 1, q])
-    return np.stack([r, g, b], axis=-1)
-
-
-def _centroid_to_hue(centroid_hz: float) -> float:
-    """Map spectral centroid to a hue: low->magenta/pink, high->teal/cyan."""
-    lo, hi = np.log10(150.0), np.log10(8000.0)
-    x = (np.log10(max(centroid_hz, 150.0)) - lo) / (hi - lo)
-    x = float(np.clip(x, 0.0, 1.0))
-    return 0.92 - 0.42 * x          # 0.92 (magenta) -> 0.50 (teal/cyan)
+# Forcing / emission tuning (named so they are easy to find and adjust).
+AMBIENT_FLOOR = 0.12        # ambient stir at silence, as a fraction of strength
+KICK_JITTER = 0.09          # spread of kick spawn positions around the anchor
+KICK_ANGLE_JITTER = 0.5     # radians of randomness on a kick's outward heading
+WANDER_AMP = 0.16           # how far the kick anchor (centre of gravity) wanders
+SOURCE_DECAY = 1.3          # emission envelope exponent (impulsive: peak at birth)
+SOURCE_EXPAND = 0.8         # how much a source's radius grows over its life
+JET_FRACTION = 0.35         # ongoing directional jet strength vs the initial impulse
+BLOOM_THRESHOLD = 0.45      # luminance above which bloom is added
 
 
 def _hex_to_rgb(h: str) -> np.ndarray:
@@ -83,6 +70,40 @@ def _curl_noise(gx: np.ndarray, gy: np.ndarray, t: float, scale: float):
     v = -(np.roll(psi, -1, 1) - np.roll(psi, 1, 1)) * 0.5    # -dpsi/dx
     peak = float(np.sqrt(u * u + v * v).max()) + 1e-6        # normalise to unit speed
     return (u / peak).astype(np.float32), (v / peak).astype(np.float32)
+
+
+def _advance_sources(sim: "FluidSim", sources: List["_Source"], n: int) -> List["_Source"]:
+    """Emit + propel every living source one step; return the survivors.
+
+    Each source streams matter ALONG its heading (dye + a directional jet, not an
+    isotropic blob), then self-propels and is carried by the flow, then ages out.
+    """
+    still: List[_Source] = []
+    for s in sources:
+        frac = s.age / s.life
+        env = (1.0 - frac) ** SOURCE_DECAY        # impulsive: peak at birth -> 0
+        r_now = s.radius * (1.0 + SOURCE_EXPAND * frac)
+        sim.add_dye(s.x, s.y, r_now, s.color, s.emit * env)
+        sim.add_force_at(s.x, s.y, r_now, s.dx * s.jet * env, s.dy * s.jet * env)
+        xi = int(np.clip(s.x * n, 0, n - 1))
+        yi = int(np.clip(s.y * n, 0, n - 1))
+        s.x = (s.x + (s.speed * s.dx + s.drift * float(sim.u[yi, xi])) / n) % 1.0
+        s.y = (s.y + (s.speed * s.dy + s.drift * float(sim.v[yi, xi])) / n) % 1.0
+        s.age += 1
+        if s.age < s.life:
+            still.append(s)
+    return still
+
+
+def _render_frame(density: np.ndarray, exposure: float, bloom: float,
+                  bloom_sigma: float, background: float) -> np.ndarray:
+    """HDR density -> filmic tone-map + bloom over a dark field -> uint8 RGB."""
+    ldr = _tonemap(density, exposure)
+    if bloom > 0:
+        bright = np.clip(ldr - BLOOM_THRESHOLD, 0.0, 1.0)
+        ldr = ldr + bloom * cv2.GaussianBlur(bright, (0, 0), sigmaX=bloom_sigma)
+    out = background + (1.0 - background) * np.clip(ldr, 0.0, 1.0)
+    return (np.clip(out, 0.0, 1.0) * 255).astype(np.uint8)
 
 
 @dataclass
@@ -278,7 +299,7 @@ def _lookahead_boost(score: Score, frame_i: int, fps: int, lookahead_s: float) -
 def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
              max_frames: Optional[int] = None,
              progress: Optional[ProgressFn] = None,
-             frame_configs: Optional[List["object"]] = None) -> SimResult:
+             frame_configs: Optional[List[FluidConfig]] = None) -> SimResult:
     """Run the fluid sim. If ``frame_configs`` is given (one FluidConfig per
     frame), the *non-structural* parameters vary per frame — this is how a single
     continuous simulation takes different parameters per musical segment.
@@ -319,7 +340,7 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
                                emit=cfg.emit * (0.5 + mag),
                                life=max(1, int(cfg.lifetime_s * fps)),
                                drift=cfg.drift, dx=dx, dy=dy, speed=cfg.speed,
-                               jet=0.35 * impulse))
+                               jet=JET_FRACTION * impulse))
 
     render_res = base_fc.render_resolution
     bloom_sigma = max(1.0, base_fc.resolution / 48)
@@ -339,16 +360,16 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
 
         # Ambient stirring carries existing dye — RMS-driven, no colour injected.
         ua, va = _curl_noise(gx, gy, t, fc.ambient_scale)
-        amp = fc.ambient_strength * (0.12 + 0.88 * rms)
+        amp = fc.ambient_strength * (AMBIENT_FLOOR + (1.0 - AMBIENT_FLOOR) * rms)
         sim.add_force(ua * amp, va * amp)
 
         # Kicks: jets radiating OUTWARD from a slowly-wandering centre of gravity,
         # so matter streams away and disperses instead of pooling into a blob.
-        wc = anchor + 0.16 * np.array([np.sin(i * 0.045), np.cos(i * 0.037)])
+        wc = anchor + WANDER_AMP * np.array([np.sin(i * 0.045), np.cos(i * 0.037)])
         if low_cfg:
             for e in low_by_frame[i]:
-                px, py = np.clip(wc + rng.normal(0, 0.09, 2), 0.05, 0.95)
-                ang = np.arctan2(py - wc[1], px - wc[0]) + rng.normal(0, 0.5)
+                px, py = np.clip(wc + rng.normal(0, KICK_JITTER, 2), 0.05, 0.95)
+                ang = np.arctan2(py - wc[1], px - wc[0]) + rng.normal(0, KICK_ANGLE_JITTER)
                 spawn(float(px), float(py), palette[0], low_cfg, e.mag, float(ang))
         # Hats: small fast darts in random directions, popping everywhere.
         if high_cfg:
@@ -366,23 +387,7 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
             spawn(float(px), float(py), palette[0] * 0.6, la, 1.0,
                   float(rng.uniform(0, 2 * np.pi)))
 
-        # Each living source streams matter ALONG its heading: dye + a directional
-        # jet (not an isotropic blob), then self-propels and is carried by the flow.
-        still: List[_Source] = []
-        for s in sources:
-            frac = s.age / s.life
-            env = (1.0 - frac) ** 1.3                 # impulsive: peak at birth -> 0
-            r_now = s.radius * (1.0 + 0.8 * frac)
-            sim.add_dye(s.x, s.y, r_now, s.color, s.emit * env)
-            sim.add_force_at(s.x, s.y, r_now, s.dx * s.jet * env, s.dy * s.jet * env)
-            xi = int(np.clip(s.x * n, 0, n - 1))
-            yi = int(np.clip(s.y * n, 0, n - 1))
-            s.x = (s.x + (s.speed * s.dx + s.drift * float(sim.u[yi, xi])) / n) % 1.0
-            s.y = (s.y + (s.speed * s.dy + s.drift * float(sim.v[yi, xi])) / n) % 1.0
-            s.age += 1
-            if s.age < s.life:
-                still.append(s)
-        sources = still
+        sources = _advance_sources(sim, sources, n)
 
         # RMS drives vorticity between recipe min/max (scaled to the velocity regime).
         vmin, vmax = fc.vorticity.min, fc.vorticity.max
@@ -390,13 +395,8 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
         sim.step(dt, vort)
 
         # Render: HDR density -> filmic tone-map + bloom over a dark field.
-        ldr = _tonemap(sim.density, fc.exposure)
-        if fc.bloom > 0:
-            bright = np.clip(ldr - 0.45, 0.0, 1.0)
-            bloom = cv2.GaussianBlur(bright, (0, 0), sigmaX=bloom_sigma)
-            ldr = ldr + fc.bloom * bloom
-        out = fc.background + (1.0 - fc.background) * np.clip(ldr, 0.0, 1.0)
-        frame = (np.clip(out, 0.0, 1.0) * 255).astype(np.uint8)
+        frame = _render_frame(sim.density, fc.exposure, fc.bloom, bloom_sigma,
+                              fc.background)
         if render_res != base_fc.resolution:
             frame = cv2.resize(frame, (render_res, render_res),
                                interpolation=cv2.INTER_LINEAR)

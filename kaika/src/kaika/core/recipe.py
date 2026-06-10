@@ -127,7 +127,11 @@ class Recipe:
 
 
 def _merge(default, data):
-    """Build a dataclass instance from defaults overlaid with a dict."""
+    """Build a dataclass instance from defaults overlaid with a dict.
+
+    Scalar/list fields are copied as-is; nested dataclass fields need a line
+    below (this is the one place to extend when adding a new nested config).
+    """
     if data is None:
         return default
     kwargs = {}

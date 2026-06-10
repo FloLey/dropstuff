@@ -24,14 +24,13 @@ from .score import Score
 from .project import Project
 from .analyze import analyze
 from .simulate import simulate
-from .control import generate_control
+from .control import generate_control, ALL_SIGNALS
 from . import diffuse as D
 from .post import assemble
 
 # progress(stage, done, total)
 ProgressFn = Callable[[str, int, int], None]
 STAGES = ["analyze", "simulate", "control", "diffuse", "post"]
-CONTROL_SIGNALS = ["depth", "canny", "flow"]
 
 
 @dataclass
@@ -63,8 +62,9 @@ def _freeze_audio(audio_path: Path, run_dir: Path) -> Path:
         return audio_path
 
 
-def _frozen_audio(run_dir: Path) -> Optional[Path]:
-    hits = sorted(run_dir.glob("audio.*"))
+def frozen_audio(run_dir: Path) -> Optional[Path]:
+    """The audio file frozen into a run dir (``audio.<ext>``), if present."""
+    hits = sorted(Path(run_dir).glob("audio.*"))
     return hits[0] if hits else None
 
 
@@ -186,7 +186,7 @@ def run_diffuse(run_dir: str | Path,
     try:
         fluid_dir = run_dir / "fluid"
         n = len(list(fluid_dir.glob("*.png")))
-        control_dirs = {s: run_dir / "control" / s for s in CONTROL_SIGNALS
+        control_dirs = {s: run_dir / "control" / s for s in ALL_SIGNALS
                         if (run_dir / "control" / s).exists()}
         diffuser = D.get_diffuser(recipe)
         req = D.DiffuseRequest(fluid_dir=fluid_dir, control_dirs=control_dirs,
@@ -197,7 +197,7 @@ def run_diffuse(run_dir: str | Path,
 
         styled = dres.styled_dir
         frames = styled if any(styled.glob("*.png")) else fluid_dir
-        frozen = _frozen_audio(run_dir) or (run_dir / "missing.wav")
+        frozen = frozen_audio(run_dir) or (run_dir / "missing.wav")
         _emit(progress, "post", 0, 1)
         final = run_dir / "kaika_final.mp4"
         stats = run_dir / "fluid_stats.json"

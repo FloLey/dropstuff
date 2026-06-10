@@ -24,7 +24,7 @@ from ..core.analyze import analyze
 from ..core.project import Project
 from ..core.score import Score
 from ..core.pipeline import (load_run, list_runs, run_pipeline, run_fluid,
-                             run_diffuse, init_project_run, _frozen_audio)
+                             run_diffuse, init_project_run, frozen_audio)
 from .db import JobDB
 from .jobs import JobManager
 
@@ -193,7 +193,9 @@ def create_app(runs_root: str | Path = "runs",
         def task(progress):
             proj = Project.from_json(rd / "project.json")
             score = Score.from_json(rd / "score.json")
-            audio = _frozen_audio(rd) or _resolve_audio(proj.audio.split(".")[0])
+            audio = frozen_audio(rd)
+            if audio is None:
+                raise FileNotFoundError("frozen audio missing for project")
             return run_fluid(proj, audio, runs_root=runs_root, run_id=run_id,
                              score=score, progress=progress)
 

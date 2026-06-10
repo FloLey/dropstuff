@@ -1,40 +1,14 @@
 """Phase S3: project (segment editor) API + staged jobs."""
 from __future__ import annotations
 
-import time
-
 import pytest
-from fastapi.testclient import TestClient
 
-from kaika.server.app import create_app
-from conftest import synth_track
+from conftest import SMALL_RECIPE as SMALL, upload_audio as _upload, wait_for_job as _wait
 
 
 @pytest.fixture
-def client(tmp_path):
-    app = create_app(runs_root=tmp_path / "runs", data_dir=tmp_path / "data")
-    with TestClient(app) as c:
-        yield c
-
-
-SMALL = {"name": "t", "seed": 1, "fluid": {"resolution": 40, "render_resolution": 40},
-         "diffusion": {"backend": "local", "control": ["depth"]}, "post": {"fps": 24}}
-
-
-def _upload(client, tmp_path):
-    wav = synth_track(tmp_path / "p.wav", duration=1.5)
-    with wav.open("rb") as f:
-        return client.post("/api/upload", files={"file": ("p.wav", f, "audio/wav")}).json()["audio_id"]
-
-
-def _wait(client, job_id, timeout=90):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        j = client.get(f"/api/jobs/{job_id}").json()
-        if j["status"] in ("done", "error"):
-            return j
-        time.sleep(0.2)
-    raise AssertionError("job timed out")
+def client(api_client):
+    return api_client
 
 
 def test_create_project_returns_segments_and_analysis(client, tmp_path):

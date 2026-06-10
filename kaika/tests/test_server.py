@@ -1,44 +1,15 @@
 """Phase 7: FastAPI server, job queue, WebSocket progress."""
 from __future__ import annotations
 
-import time
+from conftest import SMALL_RECIPE, upload_audio as _upload, wait_for_job as _wait_done
 
+# `api_client` fixture is provided by conftest; alias it as `client` here.
 import pytest
-from fastapi.testclient import TestClient
-
-from kaika.server.app import create_app
-from conftest import synth_track
 
 
 @pytest.fixture
-def client(tmp_path):
-    app = create_app(runs_root=tmp_path / "runs", data_dir=tmp_path / "data")
-    with TestClient(app) as c:
-        yield c
-
-
-def _upload(client, tmp_path):
-    wav = synth_track(tmp_path / "up.wav", duration=1.0)
-    with wav.open("rb") as f:
-        r = client.post("/api/upload", files={"file": ("up.wav", f, "audio/wav")})
-    assert r.status_code == 200
-    return r.json()["audio_id"]
-
-
-SMALL_RECIPE = {"name": "t", "seed": 1,
-                "fluid": {"resolution": 40, "render_resolution": 48},
-                "diffusion": {"backend": "local", "control": ["depth"]},
-                "post": {"fps": 24}}
-
-
-def _wait_done(client, job_id, timeout=90):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        j = client.get(f"/api/jobs/{job_id}").json()
-        if j["status"] in ("done", "error"):
-            return j
-        time.sleep(0.2)
-    raise AssertionError("job did not finish in time")
+def client(api_client):
+    return api_client
 
 
 def test_recipes_endpoint(client):
