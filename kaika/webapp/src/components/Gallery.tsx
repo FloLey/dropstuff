@@ -37,7 +37,8 @@ function Compare({ a, b, onClose }: { a: RunManifest; b: RunManifest; onClose: (
       <div className="compare-grid">
         {[{ r: a, ref: va }, { r: b, ref: vb }].map(({ r, ref }) => (
           <div key={r.id}>
-            <video ref={ref} src={runVideoUrl(r) ?? undefined} preload="auto" muted={ref === vb} />
+            <video ref={ref} src={runVideoUrl(r) ?? undefined} poster={api.posterUrl(r.id)}
+              preload="auto" muted={ref === vb} />
             <p className="muted mono" style={{ fontSize: 11 }}>{r.recipe} · {r.id}</p>
           </div>
         ))}
@@ -95,7 +96,7 @@ export default function Gallery({ onOpenInStudio }: Props) {
           const hasFinal = r.stage === "done" || r.status === "done";
           return (
             <div key={r.id} className={`card run-card ${picked.includes(r.id) ? "picked" : ""}`}>
-              {url ? <video src={url} controls loop preload="metadata" />
+              {url ? <video src={url} poster={api.posterUrl(r.id)} controls loop preload="metadata" />
                    : <p className="muted">({r.stage || r.status})</p>}
               <div className="run-meta">
                 <span className="mono">{r.recipe}</span>

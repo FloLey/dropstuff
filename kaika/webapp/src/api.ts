@@ -69,6 +69,7 @@ export const api = {
   finalUrl: (id: string) => `/api/runs/${id}/final`,
   previewUrl: (id: string) => `/api/runs/${id}/files/fluid_preview.mp4`,
   segPreviewUrl: (id: string) => `/api/runs/${id}/files/segment_preview.mp4`,
+  posterUrl: (id: string) => `/api/runs/${id}/latest_frame`,
   fileUrl: (id: string, sub: string) => `/api/runs/${id}/files/${sub}`,
 
   watchJob: (id: string, onMsg: (s: JobState) => void): WebSocket => {

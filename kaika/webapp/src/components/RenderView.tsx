@@ -108,6 +108,7 @@ export default function RenderView({ runId, jobId, onSeeGallery }: Props) {
             <video
               src={isSegment ? api.segPreviewUrl(runId)
                 : isFluid ? api.previewUrl(runId) : api.finalUrl(runId)}
+              poster={api.posterUrl(runId)}
               controls autoPlay loop
             />
             {isFluid ? (

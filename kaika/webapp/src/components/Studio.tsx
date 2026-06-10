@@ -23,6 +23,29 @@ function getNested(obj: any, path: string[], fallback: number): number {
   for (const k of path) { if (o == null) return fallback; o = o[k]; }
   return o == null ? fallback : o;
 }
+function hasNested(obj: any, path: string[]): boolean {
+  let o = obj;
+  for (const k of path) { if (o == null || typeof o !== "object" || !(k in o)) return false; o = o[k]; }
+  return o !== undefined;
+}
+
+// [label, path, default, min, max, step]
+type Row = [string, string[], number, number, number, number];
+const PRIMARY: Row[] = [
+  ["Vorticity max", ["vorticity", "max"], 38, 5, 90, 1],
+  ["Kick emit", ["splats", "low", "emit"], 0.22, 0, 0.6, 0.02],
+  ["Hat emit", ["splats", "high", "emit"], 0.11, 0, 0.4, 0.01],
+  ["Ambient stir", ["ambient_strength"], 1.6, 0, 6, 0.2],
+];
+const ADVANCED: Row[] = [
+  ["Kick lifetime (s)", ["splats", "low", "lifetime_s"], 0.8, 0.2, 3, 0.1],
+  ["Hat lifetime (s)", ["splats", "high", "lifetime_s"], 0.3, 0.1, 1.5, 0.05],
+  ["Kick speed", ["splats", "low", "speed"], 1.3, 0, 4, 0.1],
+  ["Hat speed", ["splats", "high", "speed"], 2.6, 0, 5, 0.1],
+  ["Exposure", ["exposure"], 1.9, 0.5, 4, 0.1],
+  ["Bloom", ["bloom"], 0.65, 0, 2, 0.05],
+  ["Dissipation", ["dissipation"], 0.9, 0.8, 0.99, 0.01],
+];
 
 export default function Studio({ initialRunId, onPreview }: Props) {
   const [recipes, setRecipes] = useState<RecipeEntry[]>([]);
@@ -201,8 +224,26 @@ export default function Studio({ initialRunId, onPreview }: Props) {
     setPlayhead(t);
   };
 
+  const resetSegment = () => updateSegment({ fluid: {} });
+
   const seg = project?.segments[sel];
+  const nSeg = project?.segments.length ?? 0;
   const palette: string[] = project?.recipe?.fluid?.palette ?? [];
+
+  const sliderRow = ([name, path, dflt, min, max, step]: Row) => {
+    const ov = seg ? hasNested(seg.fluid, path) : false;
+    return (
+      <div key={name} className="slider-row">
+        <label className={`field ${ov ? "ov" : ""}`}>
+          {ov && <span className="ov-dot" title="overridden for this segment">●</span>}
+          {name} <span className="val">{getNested(seg!.fluid, path, dflt)}</span>
+        </label>
+        <input type="range" min={min} max={max} step={step}
+          value={getNested(seg!.fluid, path, dflt)}
+          onChange={(e) => setFluid(path, parseFloat(e.target.value))} />
+      </div>
+    );
+  };
 
   return (
     <div className="grid">
@@ -219,8 +260,10 @@ export default function Studio({ initialRunId, onPreview }: Props) {
               <input type="file" accept="audio/*" style={{ display: "none" }}
                 onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
             </label>
-            <div style={{ marginTop: 16 }}>
-              <select value={recipeName} onChange={(e) => setRecipeName(e.target.value)}>
+            <div style={{ marginTop: 18 }}>
+              <label className="field" style={{ textAlign: "center" }}>Visual identity</label>
+              <select value={recipeName} onChange={(e) => setRecipeName(e.target.value)}
+                style={{ maxWidth: 240, margin: "0 auto" }}>
                 {recipes.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
               </select>
             </div>
@@ -265,104 +308,106 @@ export default function Studio({ initialRunId, onPreview }: Props) {
 
       <aside>
         {project && (
-          <div className="card">
+          <div className="card inspector">
             <div className="insp-tabs">
               <button className={tab === "segment" ? "active" : ""} onClick={() => setTab("segment")}>Segment</button>
               <button className={tab === "recipe" ? "active" : ""} onClick={() => setTab("recipe")}>Recipe</button>
               <button className={tab === "yaml" ? "active" : ""} onClick={openYaml}>YAML</button>
             </div>
 
-            {tab === "segment" && seg && (
-              <>
-                <label className="field">Label</label>
-                <input type="text" value={seg.label}
-                  onChange={(e) => updateSegment({ label: e.target.value })} />
+            <div className="insp-body">
+              {tab === "segment" && seg && (
+                <>
+                  <div className="seg-nav">
+                    <button disabled={sel === 0} onClick={() => setSel(sel - 1)}>‹</button>
+                    <span className="mono">{sel + 1}/{nSeg} · {seg.start.toFixed(1)}–{seg.end.toFixed(1)}s</span>
+                    <button disabled={sel >= nSeg - 1} onClick={() => setSel(sel + 1)}>›</button>
+                  </div>
 
-                <label className="field">Prompt (diffusion)</label>
-                <textarea value={seg.prompt}
-                  onChange={(e) => updateSegment({ prompt: e.target.value })} />
+                  <label className="field">Label</label>
+                  <input type="text" value={seg.label}
+                    onChange={(e) => updateSegment({ label: e.target.value })} />
 
-                {([
-                  ["Vorticity max", ["vorticity", "max"], 38, 5, 90, 1],
-                  ["Kick emit", ["splats", "low", "emit"], 0.22, 0, 0.6, 0.02],
-                  ["Kick lifetime (s)", ["splats", "low", "lifetime_s"], 0.8, 0.2, 3, 0.1],
-                  ["Hat emit", ["splats", "high", "emit"], 0.11, 0, 0.4, 0.01],
-                  ["Hat lifetime (s)", ["splats", "high", "lifetime_s"], 0.3, 0.1, 1.5, 0.05],
-                  ["Ambient stir", ["ambient_strength"], 1.6, 0, 6, 0.2],
-                  ["Exposure", ["exposure"], 1.9, 0.5, 4, 0.1],
-                  ["Bloom", ["bloom"], 0.65, 0, 2, 0.05],
-                ] as [string, string[], number, number, number, number][]).map(
-                  ([name, path, dflt, min, max, step]) => (
-                    <div key={name}>
-                      <label className="field">
-                        {name} <span className="val">{getNested(seg.fluid, path, dflt)}</span>
-                      </label>
-                      <input type="range" min={min} max={max} step={step}
-                        value={getNested(seg.fluid, path, dflt)}
-                        onChange={(e) => setFluid(path, parseFloat(e.target.value))} />
-                    </div>
-                  ))}
-              </>
-            )}
+                  <label className="field">Prompt (diffusion)</label>
+                  <textarea value={seg.prompt}
+                    onChange={(e) => updateSegment({ prompt: e.target.value })} />
 
-            {tab === "recipe" && (
-              <>
-                <label className="field">Seed</label>
-                <input type="number" value={project.recipe.seed ?? 0}
-                  onChange={(e) => setRecipeField(["seed"], parseInt(e.target.value) || 0)} />
+                  {PRIMARY.map(sliderRow)}
 
-                <label className="field">Palette</label>
-                <div className="palette-row">
-                  {palette.map((c, i) => (
-                    <input key={i} type="color" value={c}
-                      onChange={(e) => {
-                        const p = [...palette]; p[i] = e.target.value;
-                        setRecipeField(["fluid", "palette"], p);
-                      }} />
-                  ))}
-                  <button className="btn ghost slim" onClick={() =>
-                    setRecipeField(["fluid", "palette"], [...palette, "#888888"])}>+</button>
-                  {palette.length > 1 && (
+                  <details className="advanced">
+                    <summary>More settings</summary>
+                    {ADVANCED.map(sliderRow)}
+                  </details>
+
+                  <button className="btn ghost slim reset" onClick={resetSegment}>
+                    Reset segment to recipe defaults
+                  </button>
+                </>
+              )}
+
+              {tab === "recipe" && (
+                <>
+                  <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                    Global defaults — segments inherit these unless overridden.
+                  </p>
+                  <label className="field">Seed</label>
+                  <input type="number" value={project.recipe.seed ?? 0}
+                    onChange={(e) => setRecipeField(["seed"], parseInt(e.target.value) || 0)} />
+
+                  <label className="field">Palette</label>
+                  <div className="palette-row">
+                    {palette.map((c, i) => (
+                      <input key={i} type="color" value={c}
+                        onChange={(e) => {
+                          const p = [...palette]; p[i] = e.target.value;
+                          setRecipeField(["fluid", "palette"], p);
+                        }} />
+                    ))}
                     <button className="btn ghost slim" onClick={() =>
-                      setRecipeField(["fluid", "palette"], palette.slice(0, -1))}>−</button>
-                  )}
-                </div>
-                <p className="muted" style={{ fontSize: 12 }}>
-                  First colour = kicks; the rest cycle on hats.
-                </p>
+                      setRecipeField(["fluid", "palette"], [...palette, "#888888"])}>+</button>
+                    {palette.length > 1 && (
+                      <button className="btn ghost slim" onClick={() =>
+                        setRecipeField(["fluid", "palette"], palette.slice(0, -1))}>−</button>
+                    )}
+                  </div>
+                  <p className="muted" style={{ fontSize: 12 }}>
+                    First colour = kicks; the rest cycle on hats.
+                  </p>
 
-                <label className="field">
-                  Denoise strength <span className="val">{project.recipe.diffusion?.strength ?? 0.5}</span>
-                </label>
-                <input type="range" min={0.1} max={0.9} step={0.05}
-                  value={project.recipe.diffusion?.strength ?? 0.5}
-                  onChange={(e) => setRecipeField(["diffusion", "strength"], parseFloat(e.target.value))} />
-              </>
-            )}
+                  <label className="field">
+                    Denoise strength <span className="val">{project.recipe.diffusion?.strength ?? 0.5}</span>
+                  </label>
+                  <input type="range" min={0.1} max={0.9} step={0.05}
+                    value={project.recipe.diffusion?.strength ?? 0.5}
+                    onChange={(e) => setRecipeField(["diffusion", "strength"], parseFloat(e.target.value))} />
+                </>
+              )}
 
-            {tab === "yaml" && (
-              <>
-                <textarea className="yaml" value={yamlText}
-                  onChange={(e) => setYamlText(e.target.value)} spellCheck={false} />
-                {yamlErr && <p className="err">{yamlErr}</p>}
-                <button className="btn ghost" onClick={applyYaml}>Apply YAML</button>
-              </>
-            )}
+              {tab === "yaml" && (
+                <>
+                  <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                    Full recipe — total control. Apply to use it.
+                  </p>
+                  <textarea className="yaml" value={yamlText}
+                    onChange={(e) => setYamlText(e.target.value)} spellCheck={false} />
+                  {yamlErr && <p className="err">{yamlErr}</p>}
+                  <button className="btn ghost" onClick={applyYaml}>Apply YAML</button>
+                </>
+              )}
+            </div>
 
-            <label className="check">
-              <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} />
-              Draft quality (fast)
-            </label>
-            <button className="btn" disabled={busy || !runId} onClick={previewSegment}>
-              {busy ? "Working…" : `Preview segment (${seg ? (seg.end - seg.start).toFixed(1) : "?"}s)`}
-            </button>
-            <button className="btn ghost" disabled={busy || !runId} onClick={previewFull}>
-              Preview full track
-            </button>
-            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-              Previews render the fluid only (no GPU). Generate the final from the
-              Render screen once the motion feels right.
-            </p>
+            <div className="insp-footer">
+              <label className="check" title="Caps resolution for fast iteration; the final Generate always runs full quality.">
+                <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} />
+                Draft quality (fast)
+              </label>
+              <button className="btn" disabled={busy || !runId} onClick={previewSegment}>
+                {busy ? "Working…" : `Preview segment (${seg ? (seg.end - seg.start).toFixed(1) : "?"}s)`}
+              </button>
+              <button className="btn ghost" disabled={busy || !runId} onClick={previewFull}>
+                Preview full track
+              </button>
+            </div>
           </div>
         )}
       </aside>

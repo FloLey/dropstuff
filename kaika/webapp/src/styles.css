@@ -117,6 +117,29 @@ textarea { resize: vertical; min-height: 48px; }
 .seg-ops { display: flex; gap: 10px; margin-top: 12px; }
 .btn.slim { width: auto; margin-top: 0; padding: 7px 12px; font-size: 13px; }
 
+/* ---- inspector: scrollable body + pinned action footer ---- */
+.inspector { position: sticky; top: 16px; max-height: calc(100vh - 32px);
+  display: flex; flex-direction: column; }
+.insp-body { overflow-y: auto; flex: 1; min-height: 0; padding-right: 4px; }
+.insp-footer { border-top: 1px solid var(--voile); padding-top: 12px; margin-top: 10px; }
+.insp-footer .btn { margin-top: 8px; }
+.insp-footer .check { margin-top: 0; }
+
+.seg-nav { display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin-bottom: 10px; }
+.seg-nav button { width: 30px; height: 30px; border-radius: 6px; border: 1px solid var(--voile);
+  background: var(--white); font-size: 16px; line-height: 1; color: var(--encre); }
+.seg-nav button:disabled { opacity: .35; cursor: not-allowed; }
+.seg-nav button:not(:disabled):hover { border-color: var(--petale); color: var(--petale); }
+
+.slider-row { margin-bottom: 2px; }
+.field.ov { color: var(--petale); }
+.ov-dot { color: var(--petale); font-size: 8px; margin-right: 5px; vertical-align: middle; }
+details.advanced { margin: 12px 0 4px; border-top: 1px dashed var(--voile); padding-top: 8px; }
+details.advanced > summary { cursor: pointer; font-size: 12px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--courant); list-style: revert; }
+.btn.reset { margin-top: 14px; color: var(--brume); border-color: var(--voile); }
+
 /* ---- inspector tabs ---- */
 .insp-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
 .insp-tabs button {
