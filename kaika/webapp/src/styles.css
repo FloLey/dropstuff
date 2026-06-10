@@ -16,6 +16,7 @@ body {
   line-height: 1.55;
 }
 button { font-family: inherit; cursor: pointer; }
+video { width: 100%; height: auto; display: block; border-radius: 8px; background: #000; }
 .mono { font-family: "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, monospace; }
 
 /* ---- shell ---- */
