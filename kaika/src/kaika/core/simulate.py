@@ -311,10 +311,12 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
         amp = fc.ambient_strength * (0.12 + 0.88 * rms)
         sim.add_force(ua * amp, va * amp)
 
-        # Kicks: big, slow source anchored near the centre of gravity.
+        # Kicks: a puff near a slowly-wandering centre of gravity (so successive
+        # kicks land in different spots instead of stacking into one blob).
         if low_cfg:
+            wander = anchor + 0.16 * np.array([np.sin(i * 0.045), np.cos(i * 0.037)])
             for e in low_by_frame[i]:
-                px, py = np.clip(anchor + rng.normal(0, 0.05, 2), 0.05, 0.95)
+                px, py = np.clip(wander + rng.normal(0, 0.09, 2), 0.05, 0.95)
                 spawn(float(px), float(py), palette[0], low_cfg.radius,
                       low_cfg.emit, low_cfg.lifetime_s, low_cfg.drift,
                       low_cfg.force, e.mag)
@@ -333,11 +335,14 @@ def simulate(score: Score, recipe: Recipe, out_dir: str | Path,
             spawn(float(px), float(py), palette[0] * 0.5, 0.10,
                   0.10 * boost, 0.7, 0.5, 1500.0 * boost, 0.0)
 
-        # Emit from every living source (envelope 0->1->0), drift with the flow, age out.
+        # Emit from every living source: bright at birth, decaying immediately,
+        # expanding as it ages (a puff that blooms outward and fades). Drift, age out.
         still: List[_Source] = []
         for s in sources:
-            env = float(np.sin(np.pi * s.age / s.life))
-            sim.add_dye(s.x, s.y, s.radius, s.color, s.emit * env)
+            frac = s.age / s.life
+            env = (1.0 - frac) ** 1.3                 # impulsive: peak at birth -> 0
+            r_now = s.radius * (1.0 + 1.8 * frac)      # expand while fading
+            sim.add_dye(s.x, s.y, r_now, s.color, s.emit * env)
             if s.drift > 0:
                 xi = int(np.clip(s.x * n, 0, n - 1))
                 yi = int(np.clip(s.y * n, 0, n - 1))

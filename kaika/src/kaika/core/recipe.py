@@ -62,7 +62,7 @@ class FluidConfig:
     lookahead_s: float = 8.0
     splats: Dict[str, Splat] = field(default_factory=lambda: {
         "low": Splat(radius=0.12, force=9000.0, placement="anchored",
-                     lifetime_s=1.0, emit=0.18, drift=0.6),
+                     lifetime_s=0.8, emit=0.22, drift=0.7),
         "high": Splat(radius=0.03, force=3500.0, placement="scatter",
                       max_per_beat=5, lifetime_s=0.3, emit=0.11, drift=0.3),
     })
